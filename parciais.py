@@ -237,6 +237,11 @@ CSS = """
       border: 1px solid rgba(125,136,150,.28); border-left: 4px solid #7d8896;
   }
   .banner.info .b-ico { color: #8b949e; }
+  .banner.live {
+      background: linear-gradient(90deg, rgba(245,197,24,.13), rgba(245,197,24,0) 90%);
+      border: 1px solid rgba(245,197,24,.32); border-left: 4px solid #f5c518;
+  }
+  .banner.live .b-ico { color: #f5c518; animation: pulse 1.4s ease-in-out infinite; }
   /* Titulo de secao (coerente com o cabecalho dos cards) */
   .sec-title {
       font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
@@ -1536,7 +1541,14 @@ def main() -> None:
                     sel = st.selectbox("Rodada", rodadas, index=len(rodadas) - 1,
                                        format_func=lambda r: f"Rodada {r}")
                     if sel == rodada_parcial:
-                        st.warning(f"Rodada {sel} em andamento — pontuações **parciais** (ainda podem mudar).", icon=":material/warning:")
+                        st.markdown(
+                            html_banner(
+                                "sensors", f"Rodada {sel} em andamento",
+                                "As pontuações são parciais e ainda podem mudar até o fim da rodada.",
+                                cls="live",
+                            ),
+                            unsafe_allow_html=True,
+                        )
                     escudos_abrev = mapa_escudos_por_abrev(coletar_clubes(carregar_mercado() or {}))
                     _mostrar_tabela_rodada(_ler_rodada(sh, sel), escudos_abrev)
             except Exception as exc:  # noqa: BLE001
@@ -1562,7 +1574,14 @@ def main() -> None:
                     )
                 else:
                     if rodada_parcial in rodadas:
-                        st.warning(f"Inclui a rodada {rodada_parcial} em andamento — classificação **parcial** (pode mudar até o fim da rodada).", icon=":material/warning:")
+                        st.markdown(
+                            html_banner(
+                                "sensors", "Classificação parcial",
+                                f"Inclui a rodada {rodada_parcial}, ainda em andamento — pode mudar até o fim da rodada.",
+                                cls="live",
+                            ),
+                            unsafe_allow_html=True,
+                        )
                     st.markdown(html_classificacao(linhas_class), unsafe_allow_html=True)
                     st.markdown(
                         "<div class='clz-legend'>J = jogos · V = vitórias · E = empates · "
