@@ -143,7 +143,7 @@ CSS = """
   .tm-score { font-size: 25px; font-weight: 800; color: #9aa4b1; font-variant-numeric: tabular-nums; line-height: 1; }
   .tm.win .tm-name { color: #00ff87; }
   .tm.win .tm-score { color: #00ff87; text-shadow: 0 0 10px rgba(0,255,135,0.45); }
-  .crown { font-size: 14px; margin-left: 5px; color: #e6edf3; }
+  .crown { font-size: 14px; margin-left: 5px; color: #f5c518; }
   /* Lineup */
   table.lu { width: 100%; border-collapse: collapse; font-size: 12px; }
   table.lu td { padding: 2px 3px; color: #c9d1d9; border: 0; }
@@ -164,7 +164,7 @@ CSS = """
   .sdot.dr { background: #f0746b; box-shadow: 0 0 5px rgba(240,116,107,0.7); }
   .sdot.dn { background: #3a4150; }
   .sdot.blink { animation: pulse 1.4s ease-in-out infinite; }
-  .star { color: #e6edf3; margin-left: 4px; font-size: 13px; }
+  .star { color: #f5c518; margin-left: 4px; font-size: 13px; }
   td.pt { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; width: 46px; }
   td.pt.pos-val { color: #3fd07f; }
   td.pt.neg-val { color: #f0746b; }
@@ -240,6 +240,28 @@ CSS = """
   }
   /* Cabecalho da sidebar coerente */
   section[data-testid="stSidebar"] h2 { font-size: 15px; letter-spacing: .3px; }
+  /* Classificacao */
+  .clz-wrap { overflow-x: auto; background: #161b22; border: 1px solid #20262e;
+              border-radius: 14px; padding: 6px 6px 2px; box-shadow: 0 6px 18px rgba(0,0,0,.35); }
+  .clz { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .clz th { text-align: right; color: #7d8896; font-size: 10px; font-weight: 700;
+            letter-spacing: .8px; text-transform: uppercase; padding: 8px 12px;
+            border-bottom: 1px solid #20262e; }
+  .clz th.l { text-align: left; }
+  .clz td { padding: 11px 12px; text-align: right; color: #c9d1d9;
+            border-bottom: 1px solid #12161c; font-variant-numeric: tabular-nums; }
+  .clz tbody tr:last-child td { border-bottom: 0; }
+  .clz td.pos { text-align: center; width: 46px; font-weight: 800; color: #7d8896; }
+  .clz td.nm { text-align: left; font-weight: 700; color: #e6edf3; white-space: nowrap; }
+  .clz td.v { color: #3fd07f; font-weight: 700; }
+  .clz tr.top1 { background: linear-gradient(90deg, rgba(245,197,24,.16), rgba(245,197,24,0) 72%); }
+  .clz tr.top2 { background: linear-gradient(90deg, rgba(192,199,208,.13), rgba(192,199,208,0) 72%); }
+  .clz tr.top3 { background: linear-gradient(90deg, rgba(205,127,71,.15), rgba(205,127,71,0) 72%); }
+  .clz tr.top1 td.nm, .clz tr.top2 td.nm, .clz tr.top3 td.nm { color: #fff; }
+  .clz .medal { font-size: 18px; vertical-align: -4px; }
+  .clz .m1 { color: #f5c518; }
+  .clz .m2 { color: #c0c7d0; }
+  .clz .m3 { color: #cd7f47; }
 </style>
 """
 
@@ -315,6 +337,20 @@ def coletar_clubes(*fontes: Optional[Dict]) -> Dict[int, Dict]:
             except (TypeError, ValueError):
                 continue
     return clubes
+
+
+def mapa_escudos_por_abrev(clubes: Dict[int, Dict]) -> Dict[str, str]:
+    """Mapeia sigla do clube -> URL do escudo (para exibir no histórico)."""
+    m: Dict[str, str] = {}
+    for info in (clubes or {}).values():
+        if not isinstance(info, dict):
+            continue
+        ab = str(info.get("abreviacao") or "").strip()
+        esc = info.get("escudos", {}) or {}
+        url = esc.get("30x30") or esc.get("45x45") or esc.get("60x60") or ""
+        if ab and url:
+            m[ab] = url
+    return m
 
 
 def partida_status(p: Dict) -> str:
@@ -566,28 +602,35 @@ def _parse_rodada(valores) -> List[List[Tuple[str, List[Dict], float]]]:
     return [times[i:i + 2] for i in range(0, len(times) - 1, 2)]
 
 
-def _html_lineup_hist(jogadores, top_val) -> str:
+def _html_lineup_hist(jogadores, top_val, escudos=None) -> str:
     if not jogadores:
         return "<div class='empty'>Sem jogadores.</div>"
+    escudos = escudos or {}
     rows = []
     for j in jogadores:
         pos = escape(str(j.get("Posição", "")))
         nome = escape(str(j.get("Jogador", "")))
-        clube = escape(str(j.get("Clube", "")))
+        clube = str(j.get("Clube", "")).strip()
         val = float(j.get("Pts", 0) or 0)
         cls = "pos-val" if val > 0 else ("neg-val" if val < 0 else "")
         star = ("<span class='msym star'>star</span>"
                 if (top_val is not None and val == top_val and val > 0) else "")
-        clab = f"<span class='clab'>{clube}</span>" if clube else ""
+        url = escudos.get(clube)
+        if url:
+            marca = f"<img src='{escape(url)}'>"
+        elif clube:
+            marca = f"<span class='clab'>{escape(clube)}</span>"
+        else:
+            marca = ""
         rows.append(
             f"<tr><td class='pos'><span>{pos}</span></td>"
-            f"<td class='nm'>{nome}{clab}{star}</td>"
+            f"<td class='nm'>{marca}{nome}{star}</td>"
             f"<td class='pt {cls}'>{val:.2f}</td></tr>"
         )
     return "<table class='lu'>" + "".join(rows) + "</table>"
 
 
-def _html_time_hist(nome, jogadores, total, vencedor, top_val) -> str:
+def _html_time_hist(nome, jogadores, total, vencedor, top_val, escudos=None) -> str:
     win = "win" if vencedor else ""
     crown = "<span class='msym crown'>emoji_events</span>" if vencedor else ""
     sub = f"{len(jogadores)} jogadores" if jogadores else "sem escalação"
@@ -597,11 +640,11 @@ def _html_time_hist(nome, jogadores, total, vencedor, top_val) -> str:
         f"<div class='tm-name'>{escape(str(nome))}{crown}</div>"
         f"<div class='tm-sub'>{sub}</div></div>"
         f"<span class='tm-score'>{total:.2f}</span></div>"
-        f"{_html_lineup_hist(jogadores, top_val)}</div>"
+        f"{_html_lineup_hist(jogadores, top_val, escudos)}</div>"
     )
 
 
-def _html_confronto_hist(k, time_a, time_b) -> str:
+def _html_confronto_hist(k, time_a, time_b, escudos=None) -> str:
     nome_a, jog_a, tot_a = time_a
     nome_b, jog_b, tot_b = time_b
     a_win, b_win = tot_a > tot_b, tot_b > tot_a
@@ -621,14 +664,42 @@ def _html_confronto_hist(k, time_a, time_b) -> str:
         f"<span class='{seg_a}' style='width:{wa:.1f}%'></span>"
         f"<span class='{seg_b}' style='width:{wb:.1f}%'></span></div>"
         f"<div class='cc-body'>"
-        f"{_html_time_hist(nome_a, jog_a, tot_a, a_win, top_val)}"
+        f"{_html_time_hist(nome_a, jog_a, tot_a, a_win, top_val, escudos)}"
         f"<div class='cc-div'></div>"
-        f"{_html_time_hist(nome_b, jog_b, tot_b, b_win, top_val)}"
+        f"{_html_time_hist(nome_b, jog_b, tot_b, b_win, top_val, escudos)}"
         f"</div></div>"
     )
 
 
-def _mostrar_tabela_rodada(valores) -> None:
+def html_classificacao(linhas: List[Dict]) -> str:
+    """Tabela de classificação estilizada, com medalhas no top 3."""
+    medalhas = {1: ("emoji_events", "m1"), 2: ("workspace_premium", "m2"),
+                3: ("workspace_premium", "m3")}
+    head = (
+        "<thead><tr><th>#</th><th class='l'>Participante</th>"
+        "<th>J</th><th>V</th><th>E</th><th>D</th><th>PF</th><th>PS</th></tr></thead>"
+    )
+    corpo = []
+    for i, r in enumerate(linhas, start=1):
+        cls = f"top{i}" if i <= 3 else ""
+        if i in medalhas:
+            ic, mc = medalhas[i]
+            pos = f"<span class='msym medal {mc}'>{ic}</span>"
+        else:
+            pos = str(i)
+        corpo.append(
+            f"<tr class='{cls}'>"
+            f"<td class='pos'>{pos}</td>"
+            f"<td class='nm'>{escape(str(r.get('Participante', '')))}</td>"
+            f"<td>{r.get('J', 0)}</td><td class='v'>{r.get('V', 0)}</td>"
+            f"<td>{r.get('E', 0)}</td><td>{r.get('D', 0)}</td>"
+            f"<td>{float(r.get('Pontos feitos', 0)):.2f}</td>"
+            f"<td>{float(r.get('Pontos sofridos', 0)):.2f}</td></tr>"
+        )
+    return f"<div class='clz-wrap'><table class='clz'>{head}<tbody>{''.join(corpo)}</tbody></table></div>"
+
+
+def _mostrar_tabela_rodada(valores, escudos=None) -> None:
     """Renderiza a aba rodada{N} como um card por confronto (3 por rodada)."""
     if not valores:
         st.info("Aba vazia.")
@@ -643,7 +714,7 @@ def _mostrar_tabela_rodada(valores) -> None:
     for k, conf in enumerate(confrontos, start=1):
         if len(conf) < 2:
             continue
-        st.markdown(_html_confronto_hist(k, conf[0], conf[1]), unsafe_allow_html=True)
+        st.markdown(_html_confronto_hist(k, conf[0], conf[1], escudos), unsafe_allow_html=True)
 
 
 def _garantir_config(sh) -> None:
@@ -1467,23 +1538,19 @@ def main() -> None:
                 confrontos = confrontos_da_rodada(rodada, cfg, escalacoes)
                 if confrontos:
                     titulo_secao(f"Placar ao vivo — rodada {rodada}")
-                    chaves = sorted(confrontos, key=lambda x: int(x))
-                    for i in range(0, len(chaves), 2):
-                        cols = st.columns(2)
-                        for col, n in zip(cols, chaves[i:i + 2]):
-                            c = confrontos[n]
-                            ids_a = ids_da_selecao(c["a"]["selecao"])
-                            ids_b = ids_da_selecao(c["b"]["selecao"])
-                            df_a = montar_tabela_escalacao(ids_a, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
-                            df_b = montar_tabela_escalacao(ids_b, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
-                            with col:
-                                st.markdown(
-                                    html_confronto(
-                                        n, c["a"]["nome"], df_a, total_time(df_a),
-                                        c["b"]["nome"], df_b, total_time(df_b),
-                                    ),
-                                    unsafe_allow_html=True,
-                                )
+                    for n in sorted(confrontos, key=lambda x: int(x)):
+                        c = confrontos[n]
+                        ids_a = ids_da_selecao(c["a"]["selecao"])
+                        ids_b = ids_da_selecao(c["b"]["selecao"])
+                        df_a = montar_tabela_escalacao(ids_a, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
+                        df_b = montar_tabela_escalacao(ids_b, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
+                        st.markdown(
+                            html_confronto(
+                                n, c["a"]["nome"], df_a, total_time(df_a),
+                                c["b"]["nome"], df_b, total_time(df_b),
+                            ),
+                            unsafe_allow_html=True,
+                        )
 
             # ---- arquivamento manual (só master) ----
             if arquivar_agora:
@@ -1528,7 +1595,8 @@ def main() -> None:
                                        format_func=lambda r: f"Rodada {r}")
                     if sel == rodada_parcial:
                         st.warning(f"Rodada {sel} em andamento — pontuações **parciais** (ainda podem mudar).", icon=":material/warning:")
-                    _mostrar_tabela_rodada(_ler_rodada(sh, sel))
+                    escudos_abrev = mapa_escudos_por_abrev(coletar_clubes(carregar_mercado() or {}))
+                    _mostrar_tabela_rodada(_ler_rodada(sh, sel), escudos_abrev)
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Erro ao ler o histórico: {exc}")
 
@@ -1547,9 +1615,8 @@ def main() -> None:
                     if rodada_parcial in rodadas:
                         st.warning(f"Inclui a rodada {rodada_parcial} em andamento — classificação **parcial** (pode mudar até o fim da rodada).", icon=":material/warning:")
                     st.caption(f"Baseado em {len(rodadas)} rodada(s): {', '.join(str(r) for r in rodadas)}")
-                    df_class = pd.DataFrame(linhas_class)
-                    df_class.insert(0, "Pos", range(1, len(df_class) + 1))
-                    st.dataframe(df_class, width="stretch", hide_index=True)
+                    st.markdown(html_classificacao(linhas_class), unsafe_allow_html=True)
+                    st.caption("J = jogos · V = vitórias · E = empates · D = derrotas · PF = pontos feitos · PS = pontos sofridos.")
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Erro ao calcular a classificação: {exc}")
 
