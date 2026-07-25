@@ -416,28 +416,12 @@ def _gsheets_configurado() -> bool:
 
 
 @st.cache_resource(show_spinner=False)
-def _worksheet_estado():
-    """Abre (ou cria) a worksheet onde o estado e guardado como JSON em A1."""
-    import gspread
-
-    gc = gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
-    conf = st.secrets["gsheets"]
-    if conf.get("spreadsheet_key"):
-        sh = gc.open_by_key(conf["spreadsheet_key"])
-    elif conf.get("spreadsheet_url"):
-        sh = gc.open_by_url(conf["spreadsheet_url"])
-    else:
-        sh = gc.open(conf.get("spreadsheet", "Cartola Copa Escalacoes"))
-    nome = conf.get("worksheet", "estado")
-    try:
-        return sh.worksheet(nome)
-    except Exception:  # noqa: BLE001
-        return sh.add_worksheet(title=nome, rows=2, cols=2)
-
-
-@st.cache_resource(show_spinner=False)
 def _planilha():
-    """Abre a planilha (para criar/atualizar as abas rodada{N})."""
+    """Abre a planilha uma única vez por processo (cache_resource).
+
+    Prefira `spreadsheet_key` nos secrets: `open_by_key` não faz a chamada
+    extra à Drive API que `open_by_url` faz.
+    """
     import gspread
 
     gc = gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
@@ -447,6 +431,17 @@ def _planilha():
     if conf.get("spreadsheet_url"):
         return gc.open_by_url(conf["spreadsheet_url"])
     return gc.open(conf.get("spreadsheet", "Cartola Copa Escalacoes"))
+
+
+@st.cache_resource(show_spinner=False)
+def _worksheet_estado():
+    """Worksheet onde o estado é guardado como JSON em A1 (reusa _planilha())."""
+    sh = _planilha()
+    nome = st.secrets["gsheets"].get("worksheet", "estado")
+    try:
+        return sh.worksheet(nome)
+    except Exception:  # noqa: BLE001
+        return sh.add_worksheet(title=nome, rows=2, cols=2)
 
 
 def montar_linhas_rodada(rodada, confrontos, parciais, atletas_por_id, clubes_por_id, pesos):
