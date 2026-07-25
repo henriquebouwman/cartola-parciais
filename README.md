@@ -37,3 +37,21 @@ streamlit run parciais.py
 2. Crie uma **conta de serviço** e baixe a chave **JSON**.
 3. Crie uma planilha e **compartilhe** com o `client_email` da conta de serviço (como Editor).
 4. Preencha `[gcp_service_account]` (do JSON) e `[gsheets]` (`spreadsheet_key` = ID da planilha na URL, `worksheet` = `estado`) nos secrets.
+
+## Arquivamento automático de rodadas (GitHub Actions)
+
+O script `arquivar_rodada.py` grava, numa aba **`rodada{N}`** da mesma planilha, o **retrato final de cada rodada**: por time (participante = nome do time no app), a escalação com a parcial de cada jogador (posição, clube, pontos) e o total do time.
+
+Como roda sozinho (o Streamlit Cloud não tem agendador), quem dispara é o workflow `.github/workflows/arquivar-rodada.yml` — de hora em hora. Ele só grava quando a **rodada está encerrada** (mercado fechado + todos os jogos terminados) e ignora se a aba `rodada{N}` já existe (idempotente). As escalações vêm da aba `estado` do Sheets — ou seja, **exige a persistência em Google Sheets ligada** no app.
+
+**Configuração (uma vez):** em *GitHub → repositório → Settings → Secrets and variables → Actions*, crie:
+
+| Secret | Valor |
+|---|---|
+| `GCP_SERVICE_ACCOUNT` | o **JSON inteiro** da conta de serviço (a mesma do app) |
+| `GSHEETS_KEY` | o ID da planilha (da URL) |
+
+Depois, em **Actions**, habilite os workflows. Dá para testar na hora em **Actions → Arquivar rodada → Run workflow** (fora de rodada encerrada, ele só loga "nada a fazer" — o esperado).
+
+> Ajuste a frequência no `cron` do workflow se quiser checar mais perto do fim das rodadas.
+

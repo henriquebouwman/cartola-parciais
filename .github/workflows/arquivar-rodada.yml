@@ -1,0 +1,23 @@
+name: Arquivar rodada
+
+# Roda de hora em hora; grava a aba rodada{N} quando a rodada estiver encerrada.
+# Também pode ser disparado manualmente em Actions → Run workflow.
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  arquivar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install gspread google-auth requests
+      - run: python arquivar_rodada.py
+        env:
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          GSHEETS_KEY: ${{ secrets.GSHEETS_KEY }}
+          GSHEETS_WORKSHEET: estado
