@@ -262,6 +262,7 @@ CSS = """
   .clz .m1 { color: #f5c518; }
   .clz .m2 { color: #c0c7d0; }
   .clz .m3 { color: #cd7f47; }
+  .clz-legend { color: #6e7681; font-size: 10px; margin-top: 14px; letter-spacing: .2px; }
 </style>
 """
 
@@ -718,9 +719,6 @@ def _mostrar_tabela_rodada(valores, escudos=None) -> None:
     if not valores:
         st.info("Aba vazia.")
         return
-    titulo = valores[0][0] if valores[0] else ""
-    if titulo:
-        st.caption(titulo)
     confrontos = _parse_rodada(valores)
     if not confrontos:
         st.info("Sem dados nesta rodada.")
@@ -1322,7 +1320,7 @@ def main() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
     st.title(":material/stadium: Fantasy Draft")
     st.caption(
-        "Liga de fantasy (draft) do Cartola — 6 participantes em 3 confrontos por rodada. "
+        "Liga de fantasy — 6 participantes em 3 confrontos por rodada. "
         "Parciais ao vivo (pontuação pelos pesos da liga), histórico por rodada e classificação do turno. "
         "Atualiza automaticamente a cada 10 minutos."
     )
@@ -1386,15 +1384,9 @@ def main() -> None:
                     st.session_state.editor = e
                     st.session_state.pop("_base_esc", None)
                     st.rerun()
-            st.caption(
-                "Sem senha: somente leitura. O **master** edita todos os times; "
-                "cada **participante** edita apenas o seu."
-            )
+            st.caption("Faça login com sua senha")
         else:
-            quem = (
-                "Master — edita tudo" if papel == "master"
-                else f"{apel.get(editor, editor)} — edita só o seu time"
-            )
+            quem = "Master" if papel == "master" else apel.get(editor, editor)
             st.success(f"Logado: {quem}")
             if st.button("Sair", use_container_width=True, key="btn_logout"):
                 st.session_state.papel = None
@@ -1514,8 +1506,7 @@ def main() -> None:
                 st.markdown(
                     html_banner(
                         "lock", "Somente leitura",
-                        "Entre com a senha na barra lateral para montar a escalação "
-                        "(o master edita todas; cada participante edita a sua).",
+                        "Entre com a senha na barra lateral para montar a sua escalação.",
                         cls="locked",
                     ),
                     unsafe_allow_html=True,
@@ -1611,7 +1602,7 @@ def main() -> None:
 
     with aba_hist:
         titulo_secao("Histórico por rodada")
-        st.caption(f"Rodadas consideradas: {ini} a {fim} (configurável na aba `config` da planilha).")
+        st.caption("Verifique o histórico de confrontos")
         if not _gsheets_configurado():
             st.info("Configure o Google Sheets para ver o histórico arquivado.")
         else:
@@ -1634,7 +1625,7 @@ def main() -> None:
     # ============================ CLASSIFICAÇÃO ============================
     with aba_class:
         titulo_secao("Classificação")
-        st.caption(f"Rodadas {ini}–{fim} · critérios: vitórias → empates → pontos feitos → menos pontos sofridos (derrotas não desempatam).")
+        st.caption(f"Rodadas {ini}–{fim} · critérios: vitórias → empates → pontos feitos → menos pontos sofridos.")
         if not _gsheets_configurado():
             st.info("Configure o Google Sheets para ver a classificação.")
         else:
@@ -1645,9 +1636,12 @@ def main() -> None:
                 else:
                     if rodada_parcial in rodadas:
                         st.warning(f"Inclui a rodada {rodada_parcial} em andamento — classificação **parcial** (pode mudar até o fim da rodada).", icon=":material/warning:")
-                    st.caption(f"Baseado em {len(rodadas)} rodada(s): {', '.join(str(r) for r in rodadas)}")
                     st.markdown(html_classificacao(linhas_class), unsafe_allow_html=True)
-                    st.caption("J = jogos · V = vitórias · E = empates · D = derrotas · PF = pontos feitos · PS = pontos sofridos.")
+                    st.markdown(
+                        "<div class='clz-legend'>J = jogos · V = vitórias · E = empates · "
+                        "D = derrotas · PF = pontos feitos · PS = pontos sofridos.</div>",
+                        unsafe_allow_html=True,
+                    )
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Erro ao calcular a classificação: {exc}")
 
