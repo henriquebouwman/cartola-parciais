@@ -536,10 +536,10 @@ def _garantir_config(sh) -> None:
     """Cria as abas `participantes`, `confrontos` e `config` com os padrões, se faltarem."""
     titulos = [w.title for w in sh.worksheets()]
     if "participantes" not in titulos:
-        ws = sh.add_worksheet(title="participantes", rows=8, cols=3)
-        linhas = [["Posição", "Nome", "Senha"]]
+        ws = sh.add_worksheet(title="participantes", rows=8, cols=4)
+        linhas = [["Posição", "Nome", "Apelido", "Senha"]]
         for i, nome in enumerate(PARTICIPANTES_PADRAO, start=1):
-            linhas.append([i, nome, ""])
+            linhas.append([i, nome, nome, ""])
         ws.update(values=linhas, range_name="A1")
     if "confrontos" not in titulos:
         ws = sh.add_worksheet(title="confrontos", rows=len(CONFRONTOS_PADRAO) + 2, cols=7)
@@ -564,6 +564,7 @@ def carregar_config() -> Dict:
     """Lê a config (participantes, senhas, range, confrontos) da planilha; padrões se falhar."""
     cfg = {
         "participantes": list(PARTICIPANTES_PADRAO),
+        "apelidos": list(PARTICIPANTES_PADRAO),
         "senhas": ["" for _ in PARTICIPANTES_PADRAO],
         "senha_master": "",
         "rodada_ini": RODADA_INI_PADRAO,
@@ -576,13 +577,16 @@ def carregar_config() -> Dict:
         sh = _planilha()
         _garantir_config(sh)
 
-        nomes, senhas = [], []
+        nomes, apelidos, senhas = [], [], []
         for row in sh.worksheet("participantes").get_all_values()[1:]:
             if len(row) >= 2 and str(row[1]).strip():
-                nomes.append(str(row[1]).strip())
-                senhas.append(str(row[2]).strip() if len(row) >= 3 else "")
+                nome = str(row[1]).strip()
+                nomes.append(nome)
+                apelidos.append(str(row[2]).strip() if len(row) >= 3 and str(row[2]).strip() else nome)
+                senhas.append(str(row[3]).strip() if len(row) >= 4 else "")
         if nomes:
             cfg["participantes"] = nomes
+            cfg["apelidos"] = apelidos
             cfg["senhas"] = senhas
 
         for row in sh.worksheet("config").get_all_values():
@@ -611,6 +615,58 @@ def carregar_config() -> Dict:
     except Exception:  # noqa: BLE001
         pass
     return cfg
+
+
+# --------------------------------------------------------- utilitários (admin/teste)
+def resetar_config_tabs(sh) -> None:
+    """Apaga e recria as abas participantes/confrontos/config no formato padrão."""
+    for w in list(sh.worksheets()):
+        if w.title in ("participantes", "confrontos", "config"):
+            sh.del_worksheet(w)
+    _garantir_config(sh)
+
+
+def gerar_rodadas_fake(sh, cfg, rodadas) -> List[int]:
+    """Cria abas rodada{N} FICTÍCIAS (marcadas [TESTE]) para as rodadas dadas."""
+    import random
+
+    nome2ap = {n: a for n, a in zip(cfg["participantes"], cfg["apelidos"])}
+    feitas = []
+    for r in rodadas:
+        pares = cfg["confrontos"].get(r)
+        if not pares:
+            continue
+        linhas = [[f"Rodada {r} — [TESTE] dados fictícios"],
+                  ["Participante", "Jogador", "Posição", "Clube", "Parcial"]]
+        for a, b in pares:
+            for nome in (a, b):
+                linhas.append([nome2ap.get(nome, nome), "TOTAL", "", "", round(random.uniform(20, 90), 2)])
+            linhas.append([])
+        aba = f"rodada{r}"
+        if aba in [w.title for w in sh.worksheets()]:
+            ws = sh.worksheet(aba)
+            ws.clear()
+        else:
+            ws = sh.add_worksheet(title=aba, rows=len(linhas) + 5, cols=6)
+        ws.update(values=linhas, range_name="A1")
+        feitas.append(r)
+    return feitas
+
+
+def apagar_rodadas_teste(sh) -> List[str]:
+    """Apaga apenas as abas rodada{N} marcadas com [TESTE] no topo."""
+    apagadas = []
+    for w in list(sh.worksheets()):
+        if not re.fullmatch(r"rodada\d+", (w.title or "").strip()):
+            continue
+        try:
+            a1 = (w.acell("A1").value or "").upper()
+        except Exception:  # noqa: BLE001
+            a1 = ""
+        if "TESTE" in a1:
+            sh.del_worksheet(w)
+            apagadas.append(w.title)
+    return apagadas
 
 
 def carregar_estado() -> Tuple[Dict, bool]:
@@ -1043,6 +1099,7 @@ def main() -> None:
     abrir_dialogo = False
     abrir_limpar = False
     arquivar_agora = False
+    resetar_cfg = gerar_fake = apagar_fake = False
     with st.sidebar:
         st.header("Configurações")
         if senha is not None:
@@ -1089,10 +1146,41 @@ def main() -> None:
                 if st.button("Arquivar rodada agora", use_container_width=True, key="btn_arquivar"):
                     arquivar_agora = True
 
+        if _gsheets_configurado():
+            with st.expander("🧪 Teste / Admin"):
+                if st.button("Recriar abas de config", use_container_width=True, key="btn_reset_cfg"):
+                    resetar_cfg = True
+                if st.button("Gerar rodadas fake", use_container_width=True, key="btn_fake"):
+                    gerar_fake = True
+                if st.button("Apagar rodadas de teste", use_container_width=True, key="btn_del_fake"):
+                    apagar_fake = True
+
     if abrir_dialogo:
         _dialogo_senha()
     if abrir_limpar:
         _dialogo_limpar()
+
+    # Ações de teste/admin (mexem na planilha; rodam mesmo com o mercado aberto).
+    if resetar_cfg or gerar_fake or apagar_fake:
+        try:
+            sh_admin = _planilha()
+            if resetar_cfg:
+                resetar_config_tabs(sh_admin)
+                msg = "Abas participantes/confrontos/config recriadas no formato padrão."
+            elif gerar_fake:
+                _c = carregar_config()
+                rr = list(range(_c["rodada_ini"], min(_c["rodada_ini"] + 4, _c["rodada_fim"] + 1)))
+                feitas = gerar_rodadas_fake(sh_admin, _c, rr)
+                msg = f"Rodadas fake geradas: {feitas}."
+            else:
+                apagadas = apagar_rodadas_teste(sh_admin)
+                msg = f"Rodadas de teste apagadas: {apagadas or 'nenhuma'}."
+            st.cache_data.clear()
+            st.toast(msg, icon="✅")
+            st.success(msg)
+        except Exception as exc:  # noqa: BLE001
+            st.toast("Erro na ação de teste.", icon="❌")
+            st.error(f"Erro na ação de teste: {exc}")
 
     cfg = carregar_config()
 

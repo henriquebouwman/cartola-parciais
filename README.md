@@ -7,10 +7,12 @@ App [Streamlit](https://streamlit.io/) de uma **liga de fantasy (draft)** do Car
 - Auto-refresh a cada 10 minutos.
 - Três abas: **Ao vivo** (placar), **Histórico** (cada rodada arquivada) e **Classificação** do turno (V, E, D, pontos feitos e sofridos — ordena por vitórias → empates → pontos feitos → menos pontos sofridos). Quando incluem a **rodada em andamento**, sinalizam que é **parcial**.
 - **Configuração centralizada na planilha** (criada na 1ª execução, editável direto no Sheets; o app relê a cada ~2 min):
-  - **`participantes`** — `Posição | Nome | Senha` (os 6 participantes).
+  - **`participantes`** — `Posição | Nome | Apelido | Senha` (o **apelido** é o que aparece no dash).
   - **`confrontos`** — `Rodada | Casa 1 | Fora 1 | Casa 2 | Fora 2 | Casa 3 | Fora 3` (a tabela do turno).
   - **`config`** — `rodada_inicial`, `rodada_final` (range da classificação/histórico) e `senha_master`.
 - Persistência em Google Sheets (via secrets do Streamlit).
+
+Na sidebar há uma seção **🧪 Teste / Admin** (temporária) para: recriar as abas de config no formato padrão, gerar **rodadas fake** (marcadas `[TESTE]`) e apagar só essas rodadas de teste.
 
 Fonte de dados: API pública do Cartola (`https://api.cartola.globo.com`).
 
