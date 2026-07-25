@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.Python
+
+# Virtual env
+venv/
+.venv/
+env/
+
+# Estado do app (efêmero; persistência real via Google Sheets)
+escalacao_salva.json
+
+# Secrets do Streamlit (senha / Google Sheets) — NUNCA versionar
+.streamlit/secrets.toml
+
+# SO / IDE
+.DS_Store
+.vscode/
+.idea/
