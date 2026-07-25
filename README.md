@@ -1,16 +1,16 @@
-# Cartola — Parciais
+# Fantasy Draft
 
-App [Streamlit](https://streamlit.io/) para acompanhar as **parciais ao vivo** do Cartola FC (Brasileirão), comparando até **4 confrontos (8 times)** num grid 2×2.
+App [Streamlit](https://streamlit.io/) de uma **liga de fantasy (draft)** do Cartola FC (Brasileirão): **6 participantes** disputam **3 confrontos por rodada**, seguindo a tabela do turno.
 
-- Pontuação de cada jogador pelos **pesos da sua liga** (`scouts_pontuacao.json`): `Σ(scout × peso)`.
+- **Pontuação** de cada jogador pelos **pesos da liga** (`scouts_pontuacao.json`): `Σ(scout × peso)`.
 - Cards de confronto com tema escuro: barra de placar, coroa do vencedor, status ao vivo (🟢 jogou / 🔴 em andamento / cinza não iniciado) e ⭐ no maior pontuador.
 - Auto-refresh a cada 10 minutos.
-- Três abas: **Ao vivo** (placar), **Histórico** (cada rodada arquivada, lida da planilha) e **Classificação** (tabela agregada dos confrontos: V, E, D, pontos feitos e sofridos — ordena por vitórias → empates → pontos feitos → menos pontos sofridos).
-- **Configuração na planilha:** na primeira execução (com Sheets ligado), o app cria duas abas editáveis:
-  - **`config`** — `participantes` (6 nomes) e `rodada_inicial`/`rodada_final` (range considerado na classificação e no histórico).
-  - **`confrontos`** — tabela `Rodada | Casa 1 | Fora 1 | Casa 2 | Fora 2 | Casa 3 | Fora 3` (a tabela de jogos do turno).
-  Edite direto na planilha; o app relê a cada ~2 min.
-- Senha de edição e persistência em Google Sheets **opcionais** (via secrets).
+- Três abas: **Ao vivo** (placar), **Histórico** (cada rodada arquivada) e **Classificação** do turno (V, E, D, pontos feitos e sofridos — ordena por vitórias → empates → pontos feitos → menos pontos sofridos). Quando incluem a **rodada em andamento**, sinalizam que é **parcial**.
+- **Configuração centralizada na planilha** (criada na 1ª execução, editável direto no Sheets; o app relê a cada ~2 min):
+  - **`participantes`** — `Posição | Nome | Senha` (os 6 participantes).
+  - **`confrontos`** — `Rodada | Casa 1 | Fora 1 | Casa 2 | Fora 2 | Casa 3 | Fora 3` (a tabela do turno).
+  - **`config`** — `rodada_inicial`, `rodada_final` (range da classificação/histórico) e `senha_master`.
+- Persistência em Google Sheets (via secrets do Streamlit).
 
 Fonte de dados: API pública do Cartola (`https://api.cartola.globo.com`).
 

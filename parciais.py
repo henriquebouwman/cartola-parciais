@@ -1,13 +1,16 @@
 """
-Cartola - Parciais (Brasileirao)
-================================
-Visualizador de parciais (pontuacao ao vivo) do Cartola.
+Fantasy Draft
+=============
+Liga de fantasy (draft) do Cartola: 6 participantes disputam 3 confrontos por
+rodada, seguindo a tabela do turno.
 
-- Registra ate 4 confrontos (8 times) num grid 2x2 numa unica pagina.
-- Cada time tem nome editavel, formacao e escalacao proprios.
-- Pontuacao pelos pesos da liga (scouts_pontuacao.json): Sigma(scout x peso).
+- Ao vivo: parciais dos confrontos da rodada, pontuacao pelos pesos da liga
+  (scouts_pontuacao.json): Sigma(scout x peso).
+- Historico: cada rodada arquivada, lida da planilha.
+- Classificacao do turno: V, E, D, pontos feitos e sofridos.
+- Configuracao (participantes, tabela de confrontos, range, senhas) fica na
+  planilha do Google Sheets (abas participantes / confrontos / config).
 
-Design/estrutura portados do projeto irmao "Cartola Copa Parciais".
 Fonte de dados: API publica do Cartola (Brasileirao).
 
 Rodar com:  streamlit run parciais.py
@@ -256,6 +259,11 @@ def carregar_mercado() -> Optional[Dict]:
 @st.cache_data(ttl=60)
 def carregar_partidas() -> Optional[Dict]:
     return requisicao_json(f"{API_BASE}{PARTIDAS_PATH}")
+
+
+@st.cache_data(ttl=60)
+def carregar_mercado_status() -> Optional[Dict]:
+    return requisicao_json(f"{API_BASE}/mercado/status")
 
 
 def carregar_pesos_scouts() -> Dict[str, float]:
@@ -525,15 +533,14 @@ def _mostrar_tabela_rodada(valores) -> None:
 
 
 def _garantir_config(sh) -> None:
-    """Cria as abas `config` e `confrontos` com os padrões, se não existirem."""
+    """Cria as abas `participantes`, `confrontos` e `config` com os padrões, se faltarem."""
     titulos = [w.title for w in sh.worksheets()]
-    if "config" not in titulos:
-        ws = sh.add_worksheet(title="config", rows=10, cols=8)
-        ws.update(values=[
-            ["participantes"] + PARTICIPANTES_PADRAO,
-            ["rodada_inicial", RODADA_INI_PADRAO],
-            ["rodada_final", RODADA_FIM_PADRAO],
-        ], range_name="A1")
+    if "participantes" not in titulos:
+        ws = sh.add_worksheet(title="participantes", rows=8, cols=3)
+        linhas = [["Posição", "Nome", "Senha"]]
+        for i, nome in enumerate(PARTICIPANTES_PADRAO, start=1):
+            linhas.append([i, nome, ""])
+        ws.update(values=linhas, range_name="A1")
     if "confrontos" not in titulos:
         ws = sh.add_worksheet(title="confrontos", rows=len(CONFRONTOS_PADRAO) + 2, cols=7)
         linhas = [["Rodada", "Casa 1", "Fora 1", "Casa 2", "Fora 2", "Casa 3", "Fora 3"]]
@@ -543,13 +550,22 @@ def _garantir_config(sh) -> None:
                 linha += [a, b]
             linhas.append(linha)
         ws.update(values=linhas, range_name="A1")
+    if "config" not in titulos:
+        ws = sh.add_worksheet(title="config", rows=6, cols=2)
+        ws.update(values=[
+            ["rodada_inicial", RODADA_INI_PADRAO],
+            ["rodada_final", RODADA_FIM_PADRAO],
+            ["senha_master", ""],
+        ], range_name="A1")
 
 
 @st.cache_data(ttl=120, show_spinner=False)
 def carregar_config() -> Dict:
-    """Lê a config (participantes, range, confrontos) da planilha. Cai nos padrões se falhar."""
+    """Lê a config (participantes, senhas, range, confrontos) da planilha; padrões se falhar."""
     cfg = {
         "participantes": list(PARTICIPANTES_PADRAO),
+        "senhas": ["" for _ in PARTICIPANTES_PADRAO],
+        "senha_master": "",
         "rodada_ini": RODADA_INI_PADRAO,
         "rodada_fim": RODADA_FIM_PADRAO,
         "confrontos": {r: list(v) for r, v in CONFRONTOS_PADRAO.items()},
@@ -559,19 +575,28 @@ def carregar_config() -> Dict:
     try:
         sh = _planilha()
         _garantir_config(sh)
+
+        nomes, senhas = [], []
+        for row in sh.worksheet("participantes").get_all_values()[1:]:
+            if len(row) >= 2 and str(row[1]).strip():
+                nomes.append(str(row[1]).strip())
+                senhas.append(str(row[2]).strip() if len(row) >= 3 else "")
+        if nomes:
+            cfg["participantes"] = nomes
+            cfg["senhas"] = senhas
+
         for row in sh.worksheet("config").get_all_values():
             if not row:
                 continue
             chave = str(row[0]).strip().lower()
-            if chave == "participantes":
-                nomes = [str(c).strip() for c in row[1:] if str(c).strip()]
-                if nomes:
-                    cfg["participantes"] = nomes
-            elif chave in ("rodada_inicial", "rodada_final") and len(row) > 1:
-                try:
-                    cfg["rodada_ini" if chave == "rodada_inicial" else "rodada_fim"] = int(str(row[1]).strip())
-                except (TypeError, ValueError):
-                    pass
+            valor = str(row[1]).strip() if len(row) > 1 else ""
+            if chave == "rodada_inicial" and valor.isdigit():
+                cfg["rodada_ini"] = int(valor)
+            elif chave == "rodada_final" and valor.isdigit():
+                cfg["rodada_fim"] = int(valor)
+            elif chave == "senha_master":
+                cfg["senha_master"] = valor
+
         conf = {}
         for row in sh.worksheet("confrontos").get_all_values()[1:]:
             if not row or not str(row[0]).strip().isdigit():
@@ -942,12 +967,13 @@ def titulo_secao(texto: str) -> None:
 # App
 # ---------------------------------------------------------------------------
 def main() -> None:
-    st.set_page_config(page_title="Cartola - Parciais", layout="wide")
+    st.set_page_config(page_title="Fantasy Draft", page_icon="🏆", layout="wide")
     st.markdown(CSS, unsafe_allow_html=True)
-    st.title("Cartola - Parciais")
+    st.title("🏆 Fantasy Draft")
     st.caption(
-        "Parciais ao vivo de até 4 confrontos (8 times) — Brasileirão. "
-        "Pontuação pelos pesos da sua liga. Atualiza automaticamente a cada 10 minutos."
+        "Liga de fantasy (draft) do Cartola — 6 participantes em 3 confrontos por rodada. "
+        "Parciais ao vivo (pontuação pelos pesos da liga), histórico por rodada e classificação do turno. "
+        "Atualiza automaticamente a cada 10 minutos."
     )
 
     # Atualiza as parciais automaticamente a cada 10 minutos (sem recarregar a pagina).
@@ -1069,6 +1095,10 @@ def main() -> None:
         _dialogo_limpar()
 
     cfg = carregar_config()
+
+    # Rodada em andamento (mercado fechado): dados dela são PARCIAIS até o mercado reabrir.
+    _ms = carregar_mercado_status() or {}
+    rodada_parcial = _ms.get("rodada_atual") if _ms.get("status_mercado") == 2 else None
 
     aba_vivo, aba_hist, aba_class = st.tabs(["🟢 Ao vivo", "📜 Histórico", "🏆 Classificação"])
 
@@ -1244,6 +1274,8 @@ def main() -> None:
                 else:
                     sel = st.selectbox("Rodada", rodadas, index=len(rodadas) - 1,
                                        format_func=lambda r: f"Rodada {r}")
+                    if sel == rodada_parcial:
+                        st.warning(f"⚠️ Rodada {sel} em andamento — pontuações **parciais** (ainda podem mudar).")
                     _mostrar_tabela_rodada(_ler_rodada(sh, sel))
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Erro ao ler o histórico: {exc}")
@@ -1260,6 +1292,8 @@ def main() -> None:
                 if not linhas_class:
                     st.info("Nenhuma rodada arquivada dentro do range configurado.")
                 else:
+                    if rodada_parcial in rodadas:
+                        st.warning(f"⚠️ Inclui a rodada {rodada_parcial} em andamento — classificação **parcial** (pode mudar até o fim da rodada).")
                     st.caption(f"Baseado em {len(rodadas)} rodada(s): {', '.join(str(r) for r in rodadas)}")
                     df_class = pd.DataFrame(linhas_class)
                     df_class.insert(0, "Pos", range(1, len(df_class) + 1))
