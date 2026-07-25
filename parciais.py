@@ -1146,6 +1146,35 @@ def render_editor_time(
     return nome, formacao, selecao, ids
 
 
+def _sem_acento(texto) -> str:
+    """Texto em minúsculas e sem acentos, para busca acento-insensível."""
+    import unicodedata
+    nfkd = unicodedata.normalize("NFKD", str(texto))
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).lower().strip()
+
+
+def _ranquear_jogadores(query, ids, id_para_label) -> List[int]:
+    """Filtra/ordena os ids por similaridade com a query (sem acento, aproximada)."""
+    q = _sem_acento(query)
+    if not q:
+        return list(ids)
+    from difflib import SequenceMatcher
+    scored = []
+    for aid in ids:
+        alvo = _sem_acento(id_para_label.get(aid, str(aid)))
+        if q in alvo:
+            # substring vence; quanto mais perto do início, melhor
+            score = 3.0 - alvo.find(q) / (len(alvo) + 1)
+        else:
+            score = SequenceMatcher(None, q, alvo).ratio()
+            if any(p.startswith(q) for p in alvo.split()):
+                score += 1.0  # alguma palavra começa com a query
+        scored.append((score, aid))
+    scored.sort(key=lambda x: -x[0])
+    bons = [aid for sc, aid in scored if sc >= 0.5]
+    return bons or [aid for _, aid in scored[:8]]  # nunca deixa a lista vazia
+
+
 def render_editor_participante(prefixo, salvo, opcoes, id_para_label) -> Dict:
     """Editor de formação + escalação de UM participante (sem campo de nome)."""
     formacao_key = f"formacao_{prefixo}"
@@ -1157,23 +1186,40 @@ def render_editor_participante(prefixo, salvo, opcoes, id_para_label) -> Dict:
     selecao_salva = (salvo or {}).get("selecao", {}) or {}
     selecao: Dict[str, Optional[int]] = {}
     ids: List[int] = []
-    for pos, idx in listar_slots_com_indices(FORMACOES[formacao]):
-        chave_slot = f"{pos}_{idx}"
-        state_key = f"{prefixo}_{pos}_{idx}"
-        salvo_id = selecao_salva.get(chave_slot)
-        opcoes_ids = [0] + opcoes.get(pos, [])
-        if salvo_id and salvo_id not in opcoes_ids:
-            opcoes_ids.append(salvo_id)
-        if st.session_state.get(state_key) not in opcoes_ids:
-            st.session_state[state_key] = salvo_id if salvo_id in opcoes_ids else 0
-        atleta_id = st.selectbox(
-            f"{pos} {idx}", options=opcoes_ids,
-            format_func=lambda x: "-" if x == 0 else id_para_label.get(x, str(x)),
-            key=state_key,
+    formac = FORMACOES[formacao]
+
+    def _fmt(x):
+        return "-" if x == 0 else id_para_label.get(x, str(x))
+
+    for pos in ("GOL", "LAT", "ZAG", "MEI", "ATA"):
+        n = formac.get(pos, 0)
+        if n <= 0:
+            continue
+        pool = opcoes.get(pos, [])
+        busca = st.text_input(
+            f"Buscar {pos}",
+            key=f"{prefixo}_busca_{pos}",
+            placeholder="nome do jogador — sem acento, busca aproximada",
         )
-        selecao[chave_slot] = atleta_id or None
-        if atleta_id:
-            ids.append(atleta_id)
+        base_ids = _ranquear_jogadores(busca, pool, id_para_label)
+        for idx in range(1, n + 1):
+            chave_slot = f"{pos}_{idx}"
+            state_key = f"{prefixo}_{pos}_{idx}"
+            salvo_id = selecao_salva.get(chave_slot)
+            opcoes_ids = [0] + list(base_ids)
+            # mantém sempre disponível o que já está escalado/salvo neste slot,
+            # mesmo que a busca não o inclua (senão a seleção some ao filtrar).
+            for keep in (st.session_state.get(state_key), salvo_id):
+                if keep and keep not in opcoes_ids:
+                    opcoes_ids.append(keep)
+            if st.session_state.get(state_key) not in opcoes_ids:
+                st.session_state[state_key] = salvo_id if salvo_id in opcoes_ids else 0
+            atleta_id = st.selectbox(
+                f"{pos} {idx}", options=opcoes_ids, format_func=_fmt, key=state_key,
+            )
+            selecao[chave_slot] = atleta_id or None
+            if atleta_id:
+                ids.append(atleta_id)
     if len(ids) != len(set(ids)):
         st.warning("Jogador repetido nesta escalação.")
     return {"formacao": formacao, "selecao": selecao}
