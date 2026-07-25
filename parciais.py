@@ -152,8 +152,9 @@ CSS = """
   }
   section[data-testid="stSidebar"] .stButton button:hover { transform: translateY(-1px); }
   section[data-testid="stSidebar"] .stButton button:active { transform: translateY(0); }
-  /* Neutro: Atualizar parciais / Bloquear edicao */
+  /* Neutro: Atualizar parciais / Bloquear edicao / Arquivar rodada */
   section[data-testid="stSidebar"] .st-key-btn_atualizar button,
+  section[data-testid="stSidebar"] .st-key-btn_arquivar button,
   section[data-testid="stSidebar"] .st-key-btn_bloquear button {
       background: #1b2027; color: #c9d1d9; border-color: #30363d;
   }
@@ -338,6 +339,68 @@ def _worksheet_estado():
         return sh.worksheet(nome)
     except Exception:  # noqa: BLE001
         return sh.add_worksheet(title=nome, rows=2, cols=2)
+
+
+@st.cache_resource(show_spinner=False)
+def _planilha():
+    """Abre a planilha (para criar/atualizar as abas rodada{N})."""
+    import gspread
+
+    gc = gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
+    conf = st.secrets["gsheets"]
+    if conf.get("spreadsheet_key"):
+        return gc.open_by_key(conf["spreadsheet_key"])
+    if conf.get("spreadsheet_url"):
+        return gc.open_by_url(conf["spreadsheet_url"])
+    return gc.open(conf.get("spreadsheet", "Cartola Copa Escalacoes"))
+
+
+def montar_linhas_rodada(rodada, confrontos, parciais, atletas_por_id, clubes_por_id, pesos):
+    """Linhas [Participante, Jogador, Posição, Clube, Parcial] + total por time."""
+    from datetime import datetime, timezone
+
+    parciais_atletas = (parciais or {}).get("atletas", {}) or {}
+    quando = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    linhas = [[f"Rodada {rodada} — arquivado em {quando}"],
+              ["Participante", "Jogador", "Posição", "Clube", "Parcial"]]
+    for n in sorted(confrontos, key=lambda x: int(x)):
+        conf = confrontos[n] or {}
+        for lado in ("a", "b"):
+            time = conf.get(lado, {}) or {}
+            participante = (time.get("nome") or f"Confronto {n} - {lado.upper()}").strip()
+            selecao = time.get("selecao", {}) or {}
+            total = 0.0
+            tem = False
+            for _slot, aid in selecao.items():
+                if not aid:
+                    continue
+                tem = True
+                meta = atletas_por_id.get(aid, {})
+                info = parciais_atletas.get(str(aid)) or parciais_atletas.get(aid) or {}
+                scout = info.get("scout", {}) if isinstance(info, dict) else {}
+                pts = round(pontuacao_scouts(scout, pesos), 2)
+                total += pts
+                clube = clubes_por_id.get(meta.get("clube_id"), {}) if meta.get("clube_id") else {}
+                linhas.append([participante, meta.get("apelido", str(aid)),
+                               POSICOES.get(meta.get("posicao_id"), ""),
+                               (clube or {}).get("abreviacao", ""), pts])
+            if tem:
+                linhas.append([participante, "TOTAL", "", "", round(total, 2)])
+        linhas.append([])
+    return linhas
+
+
+def arquivar_rodada_no_sheets(rodada, linhas):
+    """Cria/sobrescreve a aba rodada{N} com as linhas. Retorna o nome da aba."""
+    sh = _planilha()
+    aba = f"rodada{rodada}"
+    if aba in [w.title for w in sh.worksheets()]:
+        ws = sh.worksheet(aba)
+        ws.clear()
+    else:
+        ws = sh.add_worksheet(title=aba, rows=len(linhas) + 10, cols=6)
+    ws.update(values=linhas, range_name="A1")
+    return aba
 
 
 def carregar_estado() -> Tuple[Dict, bool]:
@@ -768,6 +831,7 @@ def main() -> None:
 
     abrir_dialogo = False
     abrir_limpar = False
+    arquivar_agora = False
     with st.sidebar:
         st.header("Configurações")
         if senha is not None:
@@ -810,6 +874,9 @@ def main() -> None:
         if autorizado:
             if st.button("Limpar tudo", use_container_width=True, key="btn_limpar"):
                 abrir_limpar = True
+            if _gsheets_configurado():
+                if st.button("Arquivar rodada agora", use_container_width=True, key="btn_arquivar"):
+                    arquivar_agora = True
 
     if abrir_dialogo:
         _dialogo_senha()
@@ -905,6 +972,25 @@ def main() -> None:
                     ),
                     unsafe_allow_html=True,
                 )
+
+    # Arquivamento manual da rodada (botão da sidebar, só com edição liberada)
+    if arquivar_agora:
+        rodada_num = (parciais or {}).get("rodada")
+        atletas_pont = (parciais or {}).get("atletas", {}) or {}
+        if not rodada_num or not atletas_pont:
+            st.warning("Sem parciais disponíveis (mercado aberto?). Nada para arquivar.")
+        elif not confrontos_para_salvar:
+            st.warning("Nenhuma escalação para arquivar.")
+        else:
+            try:
+                linhas = montar_linhas_rodada(
+                    rodada_num, confrontos_para_salvar, parciais,
+                    atletas_por_id, clubes_por_id, pesos,
+                )
+                aba = arquivar_rodada_no_sheets(rodada_num, linhas)
+                st.success(f"Rodada arquivada na aba '{aba}' da planilha.")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Erro ao arquivar a rodada: {exc}")
 
     if autorizado and leitura_ok:
         # Baseline = estado renderizado desta sessao na 1a vez que ela editou.

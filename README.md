@@ -46,6 +46,8 @@ O script `arquivar_rodada.py` grava, numa aba **`rodada{N}`** da mesma planilha,
 
 Quem dispara é o workflow `.github/workflows/arquivar-rodada.yml` (de hora em hora), independente do app estar aberto. As escalações vêm da aba `estado` do Sheets — ou seja, **exige a persistência em Google Sheets ligada** no app.
 
+Há também um botão **"Arquivar rodada agora"** na sidebar do app (aparece só com a **edição liberada pela senha** e o Sheets configurado), para arquivar sob demanda a rodada atual — convive com o robô automático (ambos gravam/atualizam a mesma aba `rodada{N}`).
+
 **Configuração (uma vez):** em *GitHub → repositório → Settings → Secrets and variables → Actions*, crie:
 
 | Secret | Valor |
