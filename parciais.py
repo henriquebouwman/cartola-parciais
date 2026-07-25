@@ -213,16 +213,25 @@ CSS = """
       box-shadow: 0 4px 14px rgba(240,116,107,.28);
   }
   /* Banner de edicao bloqueada */
-  .edit-locked {
+  /* Banner (aviso) reutilizável: variantes .locked (bloqueio) e .hidden (oculto) */
+  .banner {
       display: flex; align-items: center; gap: 14px;
-      background: linear-gradient(90deg, rgba(240,116,107,.12), rgba(240,116,107,0) 90%);
-      border: 1px solid rgba(240,116,107,.30);
-      border-left: 4px solid #f0746b;
       border-radius: 10px; padding: 14px 18px; margin: 2px 0 18px;
   }
-  .edit-locked .ico { font-size: 22px; line-height: 1; }
-  .edit-locked .txt { color: #e6edf3; font-weight: 700; font-size: 14px; }
-  .edit-locked .sub { color: #9aa4b1; font-weight: 400; font-size: 12px; margin-top: 2px; }
+  .banner .b-ico { font-size: 24px; line-height: 1; }
+  .banner .b-ico .msym { color: inherit; font-size: inherit; }
+  .banner .b-txt { color: #e6edf3; font-weight: 700; font-size: 14px; }
+  .banner .b-sub { color: #9aa4b1; font-weight: 400; font-size: 12px; margin-top: 2px; }
+  .banner.locked {
+      background: linear-gradient(90deg, rgba(240,116,107,.12), rgba(240,116,107,0) 90%);
+      border: 1px solid rgba(240,116,107,.30); border-left: 4px solid #f0746b;
+  }
+  .banner.locked .b-ico { color: #f0746b; }
+  .banner.hidden {
+      background: linear-gradient(90deg, rgba(0,255,135,.10), rgba(0,255,135,0) 90%);
+      border: 1px solid rgba(0,255,135,.28); border-left: 4px solid #00ff87;
+  }
+  .banner.hidden .b-ico { color: #00ff87; }
   /* Titulo de secao (coerente com o cabecalho dos cards) */
   .sec-title {
       font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
@@ -1199,6 +1208,16 @@ def titulo_secao(texto: str) -> None:
     st.markdown(f"<div class='sec-title'>{escape(texto)}</div>", unsafe_allow_html=True)
 
 
+def html_banner(icon: str, titulo: str, sub: str, cls: str = "locked") -> str:
+    """Card de aviso estilizado. `icon` = nome do Material Symbol; `cls` = locked|hidden."""
+    return (
+        f"<div class='banner {cls}'>"
+        f"<div class='b-ico'><span class='msym'>{icon}</span></div>"
+        f"<div><div class='b-txt'>{escape(titulo)}</div>"
+        f"<div class='b-sub'>{escape(sub)}</div></div></div>"
+    )
+
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -1364,6 +1383,7 @@ def main() -> None:
 
             rodada = rodada_atual
             pares = cfg.get("confrontos", {}).get(rodada, [])
+            mercado_aberto = _ms.get("status_mercado") == 1
 
             esc_remoto, leitura_ok = carregar_estado()
             esc_remoto = dict((esc_remoto or {}).get("escalacoes", {}) or {})
@@ -1373,34 +1393,35 @@ def main() -> None:
             elif not pares:
                 st.warning(f"Sem confrontos configurados para a rodada {rodada} (aba `confrontos` da planilha).")
 
-            if not parciais.get("atletas"):
-                st.info(f"Mercado aberto — monte as escalações da rodada {rodada}. As parciais aparecem quando a rodada começar.")
-
             if papel is not None and not leitura_ok:
                 st.warning(
                     "Falha ao ler o estado salvo: as edições NÃO serão salvas nesta sessão "
                     "para proteger os dados. Clique em 'Atualizar parciais' para tentar de novo."
                 )
 
-            # ---- editores (cada um só edita o que pode) ----
-            editaveis = [n for n in cfg["participantes"] if pode_editar(n, papel, editor)]
+            # ---- edição liberada só com o mercado ABERTO (antes do fechamento) ----
+            editaveis = (
+                [n for n in cfg["participantes"] if pode_editar(n, papel, editor)]
+                if mercado_aberto else []
+            )
             editados: Dict[str, Dict] = {}
-            if editaveis:
+            if mercado_aberto and editaveis:
                 titulo_secao("Sua escalação" if papel == "participante" else "Editar escalações")
+                st.caption("Monte ou ajuste sua escalação — dá para editar até o mercado fechar.")
                 for nome in editaveis:
                     i = cfg["participantes"].index(nome)
                     with st.expander(apel.get(nome, nome), icon=":material/shield_person:", expanded=(papel == "participante")):
                         editados[nome] = render_editor_participante(
                             f"p{i}", esc_remoto.get(nome, {}), opcoes, id_para_label
                         )
-            else:
+            elif mercado_aberto:
                 st.markdown(
-                    "<div class='edit-locked'>"
-                    "<div class='ico'><span class='msym'>lock</span></div>"
-                    "<div><div class='txt'>Somente leitura</div>"
-                    "<div class='sub'>Entre com a senha na barra lateral para editar a escalação "
-                    "(o master edita todas; cada participante edita a sua).</div>"
-                    "</div></div>",
+                    html_banner(
+                        "lock", "Somente leitura",
+                        "Entre com a senha na barra lateral para montar a escalação "
+                        "(o master edita todas; cada participante edita a sua).",
+                        cls="locked",
+                    ),
                     unsafe_allow_html=True,
                 )
 
@@ -1431,27 +1452,38 @@ def main() -> None:
                         base[nome] = v
                     escalacoes = resc
 
-            # ---- placar ao vivo (confrontos da rodada pela tabela) ----
-            confrontos = confrontos_da_rodada(rodada, cfg, escalacoes)
-            if confrontos:
-                titulo_secao(f"Placar ao vivo — rodada {rodada}")
-                chaves = sorted(confrontos, key=lambda x: int(x))
-                for i in range(0, len(chaves), 2):
-                    cols = st.columns(2)
-                    for col, n in zip(cols, chaves[i:i + 2]):
-                        c = confrontos[n]
-                        ids_a = ids_da_selecao(c["a"]["selecao"])
-                        ids_b = ids_da_selecao(c["b"]["selecao"])
-                        df_a = montar_tabela_escalacao(ids_a, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
-                        df_b = montar_tabela_escalacao(ids_b, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
-                        with col:
-                            st.markdown(
-                                html_confronto(
-                                    n, c["a"]["nome"], df_a, total_time(df_a),
-                                    c["b"]["nome"], df_b, total_time(df_b),
-                                ),
-                                unsafe_allow_html=True,
-                            )
+            # ---- placar: as escalações só são REVELADAS após o fechamento do mercado ----
+            if mercado_aberto:
+                st.markdown(
+                    html_banner(
+                        "visibility_off", f"Escalações ocultas — rodada {rodada}",
+                        "Os times de cada participante aparecem quando o mercado fechar e a "
+                        "rodada começar — assim ninguém vê a escalação do adversário antes.",
+                        cls="hidden",
+                    ),
+                    unsafe_allow_html=True,
+                )
+            else:
+                confrontos = confrontos_da_rodada(rodada, cfg, escalacoes)
+                if confrontos:
+                    titulo_secao(f"Placar ao vivo — rodada {rodada}")
+                    chaves = sorted(confrontos, key=lambda x: int(x))
+                    for i in range(0, len(chaves), 2):
+                        cols = st.columns(2)
+                        for col, n in zip(cols, chaves[i:i + 2]):
+                            c = confrontos[n]
+                            ids_a = ids_da_selecao(c["a"]["selecao"])
+                            ids_b = ids_da_selecao(c["b"]["selecao"])
+                            df_a = montar_tabela_escalacao(ids_a, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
+                            df_b = montar_tabela_escalacao(ids_b, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
+                            with col:
+                                st.markdown(
+                                    html_confronto(
+                                        n, c["a"]["nome"], df_a, total_time(df_a),
+                                        c["b"]["nome"], df_b, total_time(df_b),
+                                    ),
+                                    unsafe_allow_html=True,
+                                )
 
             # ---- arquivamento manual (só master) ----
             if arquivar_agora:
