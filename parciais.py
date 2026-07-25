@@ -360,6 +360,20 @@ def _planilha():
     return gc.open(conf.get("spreadsheet", "Cartola Copa Escalacoes"))
 
 
+def testar_escrita_sheets() -> str:
+    """Diagnóstico: grava um carimbo na aba `_teste_conexao`. Retorna o carimbo."""
+    from datetime import datetime, timezone
+
+    sh = _planilha()
+    aba = "_teste_conexao"
+    if aba not in [w.title for w in sh.worksheets()]:
+        sh.add_worksheet(title=aba, rows=2, cols=2)
+    ws = sh.worksheet(aba)
+    carimbo = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    ws.update(values=[["Teste de escrita OK", carimbo]], range_name="A1")
+    return carimbo
+
+
 def montar_linhas_rodada(rodada, confrontos, parciais, atletas_por_id, clubes_por_id, pesos):
     """Linhas [Participante, Jogador, Posição, Clube, Parcial] + total por time."""
     from datetime import datetime, timezone
@@ -837,6 +851,7 @@ def main() -> None:
     abrir_dialogo = False
     abrir_limpar = False
     arquivar_agora = False
+    testar_sheets = False
     with st.sidebar:
         st.header("Configurações")
         if senha is not None:
@@ -882,11 +897,25 @@ def main() -> None:
             if _gsheets_configurado():
                 if st.button("Arquivar rodada agora", use_container_width=True, key="btn_arquivar"):
                     arquivar_agora = True
+        if _gsheets_configurado():
+            if st.button("🔌 Testar escrita no Sheets", use_container_width=True, key="btn_teste_sheets"):
+                testar_sheets = True
 
     if abrir_dialogo:
         _dialogo_senha()
     if abrir_limpar:
         _dialogo_limpar()
+
+    # Diagnóstico: escreve um carimbo na aba _teste_conexao (roda com o mercado aberto).
+    if testar_sheets:
+        try:
+            with st.spinner("Escrevendo teste na planilha..."):
+                carimbo = testar_escrita_sheets()
+            st.toast("Escrita no Sheets OK!", icon="✅")
+            st.success(f"Escrita OK — gravei na aba `_teste_conexao` da planilha às {carimbo}.")
+        except Exception as exc:  # noqa: BLE001
+            st.toast("Falha na escrita no Sheets", icon="❌")
+            st.error(f"Falha ao escrever no Sheets: {exc}")
 
     parciais = carregar_parciais()
     if not parciais:
