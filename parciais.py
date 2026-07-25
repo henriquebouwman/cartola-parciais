@@ -271,7 +271,7 @@ CSS = """
 # ---------------------------------------------------------------------------
 def requisicao_json(url: str) -> Optional[Dict]:
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         response.raise_for_status()
     except Exception as exc:  # noqa: BLE001
         st.error(f"Erro ao acessar a API: {exc}")
@@ -497,18 +497,38 @@ def arquivar_rodada_no_sheets(rodada, linhas):
     return aba
 
 
-def _rodadas_disponiveis(sh) -> List[int]:
-    """Números das rodadas com aba `rodada{N}` na planilha, ordenados."""
+@st.cache_data(ttl=60, show_spinner=False)
+def _rodadas_disponiveis(_sh) -> List[int]:
+    """Números das rodadas com aba `rodada{N}` na planilha, ordenados (cache 60s)."""
     nums = []
-    for w in sh.worksheets():
+    for w in _sh.worksheets():
         m = re.fullmatch(r"rodada(\d+)", (w.title or "").strip())
         if m:
             nums.append(int(m.group(1)))
     return sorted(nums)
 
 
-def _ler_rodada(sh, rodada) -> List[List[str]]:
-    return sh.worksheet(f"rodada{rodada}").get_all_values()
+@st.cache_data(ttl=60, show_spinner=False)
+def _ler_rodada(_sh, rodada) -> List[List[str]]:
+    """Lê uma aba rodada{N} (cache 60s por rodada)."""
+    return _sh.worksheet(f"rodada{rodada}").get_all_values()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _ler_varias_rodadas(_sh, rodadas: Tuple[int, ...]) -> Dict[int, List[List[str]]]:
+    """Lê várias abas rodada{N} numa ÚNICA requisição (batchGet). Cache 60s."""
+    if not rodadas:
+        return {}
+    ranges = [f"'rodada{r}'" for r in rodadas]
+    try:
+        resp = _sh.values_batch_get(ranges)
+    except Exception:  # noqa: BLE001
+        # Fallback: leituras individuais (ainda cacheadas por rodada).
+        return {r: _ler_rodada(_sh, r) for r in rodadas}
+    out: Dict[int, List[List[str]]] = {}
+    for r, vr in zip(rodadas, resp.get("valueRanges", [])):
+        out[r] = vr.get("values", []) or []
+    return out
 
 
 def _totais_confrontos(valores) -> List[Tuple[str, float, str, float]]:
@@ -528,20 +548,19 @@ def _totais_confrontos(valores) -> List[Tuple[str, float, str, float]]:
     return confrontos
 
 
-def calcular_classificacao(sh, rodada_ini=None, rodada_fim=None):
-    """Agrega os confrontos das rodadas arquivadas dentro do range. Retorna (linhas, rodadas)."""
+@st.cache_data(ttl=60, show_spinner=False)
+def calcular_classificacao(_sh, rodada_ini=None, rodada_fim=None):
+    """Agrega os confrontos das rodadas do range (cache 60s). Retorna (linhas, rodadas)."""
     from collections import defaultdict
 
     stats = defaultdict(lambda: {"J": 0, "V": 0, "E": 0, "D": 0, "PF": 0.0, "PS": 0.0})
     rodadas = [
-        r for r in _rodadas_disponiveis(sh)
+        r for r in _rodadas_disponiveis(_sh)
         if (rodada_ini is None or r >= rodada_ini) and (rodada_fim is None or r <= rodada_fim)
     ]
+    dados = _ler_varias_rodadas(_sh, tuple(rodadas))  # 1 requisição para todas as rodadas
     for r in rodadas:
-        try:
-            confrontos = _totais_confrontos(_ler_rodada(sh, r))
-        except Exception:  # noqa: BLE001
-            continue
+        confrontos = _totais_confrontos(dados.get(r, []))
         for a, pa, b, pb in confrontos:
             for me, mine, theirs in ((a, pa, pb), (b, pb, pa)):
                 if not me:
@@ -897,6 +916,17 @@ def carregar_estado() -> Tuple[Dict, bool]:
             return (json.load(f) or {}), True
     except Exception:  # noqa: BLE001
         return {}, False
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def carregar_estado_cache() -> Tuple[Dict, bool]:
+    """Versão cacheada de carregar_estado() para EXIBIÇÃO (cache 15s).
+
+    Reduz drasticamente as leituras no Sheets durante a edição (cada rerun
+    de widget não vira uma leitura). O SALVAMENTO usa carregar_estado() fresco
+    para não sobrescrever alterações de outro participante.
+    """
+    return carregar_estado()
 
 
 def salvar_escalacao_salva(dados: Dict) -> None:
@@ -1456,7 +1486,7 @@ def main() -> None:
             pares = cfg.get("confrontos", {}).get(rodada, [])
             mercado_aberto = _ms.get("status_mercado") == 1
 
-            esc_remoto, leitura_ok = carregar_estado()
+            esc_remoto, leitura_ok = carregar_estado_cache()  # display: cacheado (15s)
             esc_remoto = dict((esc_remoto or {}).get("escalacoes", {}) or {})
 
             if not rodada:
@@ -1516,12 +1546,17 @@ def main() -> None:
                             continue
                         mudou[nome] = atual
                 if mudou:
-                    resc = dict(esc_remoto)
-                    resc.update(mudou)
-                    salvar_escalacao_salva({"escalacoes": resc})
+                    # Leitura FRESCA (sem cache) na hora de salvar: garante o merge
+                    # sobre o estado mais recente, sem sobrescrever outro participante.
+                    fresco, ok_fresco = carregar_estado()
+                    base_map = (dict((fresco or {}).get("escalacoes", {}) or {})
+                                if ok_fresco else dict(esc_remoto))
+                    base_map.update(mudou)
+                    salvar_escalacao_salva({"escalacoes": base_map})
+                    carregar_estado_cache.clear()  # próximos reruns já veem o novo estado
                     for nome, v in mudou.items():
                         base[nome] = v
-                    escalacoes = resc
+                    escalacoes = {**base_map, **editados}
 
             # ---- placar: as escalações só são REVELADAS após o fechamento do mercado ----
             if mercado_aberto:
@@ -1569,6 +1604,7 @@ def main() -> None:
                                     atletas_por_id, clubes_por_id, pesos,
                                 )
                                 aba = arquivar_rodada_no_sheets(rodada_num, linhas)
+                            st.cache_data.clear()  # histórico/classificação releem a nova rodada
                             st.toast(f"Rodada arquivada na aba '{aba}'.", icon=":material/check_circle:")
                             st.success(f"Rodada arquivada na aba '{aba}' da planilha.")
                         except Exception as exc:  # noqa: BLE001
