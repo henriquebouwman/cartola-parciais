@@ -203,9 +203,14 @@ def requisicao_json(url: str) -> Optional[Dict]:
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
-        return response.json()
     except Exception as exc:  # noqa: BLE001
         st.error(f"Erro ao acessar a API: {exc}")
+        return None
+    # Corpo vazio/não-JSON é normal quando o mercado está aberto (sem parciais):
+    # retorna None silenciosamente e deixa o app mostrar o aviso amigável.
+    try:
+        return response.json()
+    except ValueError:
         return None
 
 
