@@ -6,6 +6,10 @@ App [Streamlit](https://streamlit.io/) para acompanhar as **parciais ao vivo** d
 - Cards de confronto com tema escuro: barra de placar, coroa do vencedor, status ao vivo (🟢 jogou / 🔴 em andamento / cinza não iniciado) e ⭐ no maior pontuador.
 - Auto-refresh a cada 10 minutos.
 - Três abas: **Ao vivo** (placar), **Histórico** (cada rodada arquivada, lida da planilha) e **Classificação** (tabela agregada dos confrontos: V, E, D, pontos feitos e sofridos — ordena por vitórias → empates → pontos feitos → menos pontos sofridos).
+- **Configuração na planilha:** na primeira execução (com Sheets ligado), o app cria duas abas editáveis:
+  - **`config`** — `participantes` (6 nomes) e `rodada_inicial`/`rodada_final` (range considerado na classificação e no histórico).
+  - **`confrontos`** — tabela `Rodada | Casa 1 | Fora 1 | Casa 2 | Fora 2 | Casa 3 | Fora 3` (a tabela de jogos do turno).
+  Edite direto na planilha; o app relê a cada ~2 min.
 - Senha de edição e persistência em Google Sheets **opcionais** (via secrets).
 
 Fonte de dados: API pública do Cartola (`https://api.cartola.globo.com`).

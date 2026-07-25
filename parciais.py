@@ -32,7 +32,35 @@ ESCALACAO_FILE = str(BASE_DIR / "escalacao_salva.json")
 SCOUTS_PESOS_FILE = str(BASE_DIR / "scouts_pontuacao.json")
 PARTIDAS_PATH = "/partidas"
 
-MAX_CONFRONTOS = 4
+MAX_CONFRONTOS = 3
+
+# --- Configuração padrão (semeada na planilha na 1ª execução; editável lá depois) ---
+PARTICIPANTES_PADRAO = [
+    "Rafael Raposo", "Renato Nóbrega", "Rogério Melo",
+    "Henrique Bouwman", "Filipe", "Arthur Furtado",
+]
+RODADA_INI_PADRAO, RODADA_FIM_PADRAO = 20, 38
+CONFRONTOS_PADRAO = {
+    20: [("Rafael Raposo", "Renato Nóbrega"), ("Rogério Melo", "Henrique Bouwman"), ("Filipe", "Arthur Furtado")],
+    21: [("Rafael Raposo", "Henrique Bouwman"), ("Renato Nóbrega", "Arthur Furtado"), ("Rogério Melo", "Filipe")],
+    22: [("Rafael Raposo", "Arthur Furtado"), ("Henrique Bouwman", "Filipe"), ("Renato Nóbrega", "Rogério Melo")],
+    23: [("Rafael Raposo", "Filipe"), ("Arthur Furtado", "Rogério Melo"), ("Henrique Bouwman", "Renato Nóbrega")],
+    24: [("Rafael Raposo", "Rogério Melo"), ("Filipe", "Renato Nóbrega"), ("Arthur Furtado", "Henrique Bouwman")],
+    25: [("Renato Nóbrega", "Rafael Raposo"), ("Henrique Bouwman", "Rogério Melo"), ("Arthur Furtado", "Filipe")],
+    26: [("Henrique Bouwman", "Rafael Raposo"), ("Arthur Furtado", "Renato Nóbrega"), ("Filipe", "Rogério Melo")],
+    27: [("Arthur Furtado", "Rafael Raposo"), ("Filipe", "Henrique Bouwman"), ("Rogério Melo", "Renato Nóbrega")],
+    28: [("Filipe", "Rafael Raposo"), ("Rogério Melo", "Arthur Furtado"), ("Renato Nóbrega", "Henrique Bouwman")],
+    29: [("Rogério Melo", "Rafael Raposo"), ("Renato Nóbrega", "Filipe"), ("Henrique Bouwman", "Arthur Furtado")],
+    30: [("Rafael Raposo", "Renato Nóbrega"), ("Rogério Melo", "Henrique Bouwman"), ("Filipe", "Arthur Furtado")],
+    31: [("Rafael Raposo", "Henrique Bouwman"), ("Renato Nóbrega", "Arthur Furtado"), ("Rogério Melo", "Filipe")],
+    32: [("Rafael Raposo", "Arthur Furtado"), ("Henrique Bouwman", "Filipe"), ("Renato Nóbrega", "Rogério Melo")],
+    33: [("Rafael Raposo", "Filipe"), ("Arthur Furtado", "Rogério Melo"), ("Henrique Bouwman", "Renato Nóbrega")],
+    34: [("Rafael Raposo", "Rogério Melo"), ("Filipe", "Renato Nóbrega"), ("Arthur Furtado", "Henrique Bouwman")],
+    35: [("Renato Nóbrega", "Rafael Raposo"), ("Henrique Bouwman", "Rogério Melo"), ("Arthur Furtado", "Filipe")],
+    36: [("Henrique Bouwman", "Rafael Raposo"), ("Arthur Furtado", "Renato Nóbrega"), ("Filipe", "Rogério Melo")],
+    37: [("Arthur Furtado", "Rafael Raposo"), ("Filipe", "Henrique Bouwman"), ("Rogério Melo", "Renato Nóbrega")],
+    38: [("Filipe", "Rafael Raposo"), ("Rogério Melo", "Arthur Furtado"), ("Renato Nóbrega", "Henrique Bouwman")],
+}
 
 POSICOES = {
     1: "GOL",
@@ -440,12 +468,15 @@ def _totais_confrontos(valores) -> List[Tuple[str, float, str, float]]:
     return confrontos
 
 
-def calcular_classificacao(sh):
-    """Agrega os confrontos de todas as rodadas arquivadas. Retorna (linhas, rodadas)."""
+def calcular_classificacao(sh, rodada_ini=None, rodada_fim=None):
+    """Agrega os confrontos das rodadas arquivadas dentro do range. Retorna (linhas, rodadas)."""
     from collections import defaultdict
 
     stats = defaultdict(lambda: {"J": 0, "V": 0, "E": 0, "D": 0, "PF": 0.0, "PS": 0.0})
-    rodadas = _rodadas_disponiveis(sh)
+    rodadas = [
+        r for r in _rodadas_disponiveis(sh)
+        if (rodada_ini is None or r >= rodada_ini) and (rodada_fim is None or r <= rodada_fim)
+    ]
     for r in rodadas:
         try:
             confrontos = _totais_confrontos(_ler_rodada(sh, r))
@@ -491,6 +522,70 @@ def _mostrar_tabela_rodada(valores) -> None:
         st.dataframe(pd.DataFrame(dados, columns=header), width="stretch", hide_index=True)
     else:
         st.info("Sem dados nesta rodada.")
+
+
+def _garantir_config(sh) -> None:
+    """Cria as abas `config` e `confrontos` com os padrões, se não existirem."""
+    titulos = [w.title for w in sh.worksheets()]
+    if "config" not in titulos:
+        ws = sh.add_worksheet(title="config", rows=10, cols=8)
+        ws.update(values=[
+            ["participantes"] + PARTICIPANTES_PADRAO,
+            ["rodada_inicial", RODADA_INI_PADRAO],
+            ["rodada_final", RODADA_FIM_PADRAO],
+        ], range_name="A1")
+    if "confrontos" not in titulos:
+        ws = sh.add_worksheet(title="confrontos", rows=len(CONFRONTOS_PADRAO) + 2, cols=7)
+        linhas = [["Rodada", "Casa 1", "Fora 1", "Casa 2", "Fora 2", "Casa 3", "Fora 3"]]
+        for r in sorted(CONFRONTOS_PADRAO):
+            linha = [r]
+            for a, b in CONFRONTOS_PADRAO[r]:
+                linha += [a, b]
+            linhas.append(linha)
+        ws.update(values=linhas, range_name="A1")
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def carregar_config() -> Dict:
+    """Lê a config (participantes, range, confrontos) da planilha. Cai nos padrões se falhar."""
+    cfg = {
+        "participantes": list(PARTICIPANTES_PADRAO),
+        "rodada_ini": RODADA_INI_PADRAO,
+        "rodada_fim": RODADA_FIM_PADRAO,
+        "confrontos": {r: list(v) for r, v in CONFRONTOS_PADRAO.items()},
+    }
+    if not _gsheets_configurado():
+        return cfg
+    try:
+        sh = _planilha()
+        _garantir_config(sh)
+        for row in sh.worksheet("config").get_all_values():
+            if not row:
+                continue
+            chave = str(row[0]).strip().lower()
+            if chave == "participantes":
+                nomes = [str(c).strip() for c in row[1:] if str(c).strip()]
+                if nomes:
+                    cfg["participantes"] = nomes
+            elif chave in ("rodada_inicial", "rodada_final") and len(row) > 1:
+                try:
+                    cfg["rodada_ini" if chave == "rodada_inicial" else "rodada_fim"] = int(str(row[1]).strip())
+                except (TypeError, ValueError):
+                    pass
+        conf = {}
+        for row in sh.worksheet("confrontos").get_all_values()[1:]:
+            if not row or not str(row[0]).strip().isdigit():
+                continue
+            cells = [str(c).strip() for c in row[1:]]
+            pares = [(cells[i], cells[i + 1]) for i in range(0, 6, 2)
+                     if i + 1 < len(cells) and cells[i] and cells[i + 1]]
+            if pares:
+                conf[int(str(row[0]).strip())] = pares
+        if conf:
+            cfg["confrontos"] = conf
+    except Exception:  # noqa: BLE001
+        pass
+    return cfg
 
 
 def carregar_estado() -> Tuple[Dict, bool]:
@@ -973,6 +1068,8 @@ def main() -> None:
     if abrir_limpar:
         _dialogo_limpar()
 
+    cfg = carregar_config()
+
     aba_vivo, aba_hist, aba_class = st.tabs(["🟢 Ao vivo", "📜 Histórico", "🏆 Classificação"])
 
     # ============================ AO VIVO ============================
@@ -1130,16 +1227,20 @@ def main() -> None:
                         st.session_state._base_num = num if num_mudou else base_num
 
     # ============================ HISTÓRICO ============================
+    ini, fim = cfg.get("rodada_ini"), cfg.get("rodada_fim")
+
     with aba_hist:
         titulo_secao("Histórico por rodada")
+        st.caption(f"Rodadas consideradas: {ini} a {fim} (configurável na aba `config` da planilha).")
         if not _gsheets_configurado():
             st.info("Configure o Google Sheets para ver o histórico arquivado.")
         else:
             try:
                 sh = _planilha()
-                rodadas = _rodadas_disponiveis(sh)
+                rodadas = [r for r in _rodadas_disponiveis(sh)
+                           if (ini is None or r >= ini) and (fim is None or r <= fim)]
                 if not rodadas:
-                    st.info("Nenhuma rodada arquivada ainda.")
+                    st.info("Nenhuma rodada arquivada dentro do range configurado.")
                 else:
                     sel = st.selectbox("Rodada", rodadas, index=len(rodadas) - 1,
                                        format_func=lambda r: f"Rodada {r}")
@@ -1150,14 +1251,14 @@ def main() -> None:
     # ============================ CLASSIFICAÇÃO ============================
     with aba_class:
         titulo_secao("Classificação")
-        st.caption("Critérios: vitórias → empates → pontos feitos → menos pontos sofridos (derrotas não desempatam).")
+        st.caption(f"Rodadas {ini}–{fim} · critérios: vitórias → empates → pontos feitos → menos pontos sofridos (derrotas não desempatam).")
         if not _gsheets_configurado():
             st.info("Configure o Google Sheets para ver a classificação.")
         else:
             try:
-                linhas_class, rodadas = calcular_classificacao(_planilha())
+                linhas_class, rodadas = calcular_classificacao(_planilha(), ini, fim)
                 if not linhas_class:
-                    st.info("Nenhuma rodada arquivada ainda.")
+                    st.info("Nenhuma rodada arquivada dentro do range configurado.")
                 else:
                     st.caption(f"Baseado em {len(rodadas)} rodada(s): {', '.join(str(r) for r in rodadas)}")
                     df_class = pd.DataFrame(linhas_class)
