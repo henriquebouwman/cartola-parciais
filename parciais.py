@@ -885,6 +885,9 @@ def main() -> None:
 
     parciais = carregar_parciais()
     if not parciais:
+        if arquivar_agora:
+            st.toast("Mercado aberto / sem parciais — nada para arquivar.", icon="⚠️")
+        st.info("Sem parciais no momento (mercado aberto). O placar aparece quando a rodada começa.")
         st.stop()
     mercado = carregar_mercado()
     if not mercado:
@@ -978,18 +981,21 @@ def main() -> None:
         rodada_num = (parciais or {}).get("rodada")
         atletas_pont = (parciais or {}).get("atletas", {}) or {}
         if not rodada_num or not atletas_pont:
-            st.warning("Sem parciais disponíveis (mercado aberto?). Nada para arquivar.")
+            st.toast("Sem parciais disponíveis (mercado aberto?). Nada para arquivar.", icon="⚠️")
         elif not confrontos_para_salvar:
-            st.warning("Nenhuma escalação para arquivar.")
+            st.toast("Nenhuma escalação para arquivar.", icon="⚠️")
         else:
             try:
-                linhas = montar_linhas_rodada(
-                    rodada_num, confrontos_para_salvar, parciais,
-                    atletas_por_id, clubes_por_id, pesos,
-                )
-                aba = arquivar_rodada_no_sheets(rodada_num, linhas)
+                with st.spinner("Arquivando rodada na planilha..."):
+                    linhas = montar_linhas_rodada(
+                        rodada_num, confrontos_para_salvar, parciais,
+                        atletas_por_id, clubes_por_id, pesos,
+                    )
+                    aba = arquivar_rodada_no_sheets(rodada_num, linhas)
+                st.toast(f"Rodada arquivada na aba '{aba}'.", icon="✅")
                 st.success(f"Rodada arquivada na aba '{aba}' da planilha.")
             except Exception as exc:  # noqa: BLE001
+                st.toast("Erro ao arquivar a rodada.", icon="❌")
                 st.error(f"Erro ao arquivar a rodada: {exc}")
 
     if autorizado and leitura_ok:
