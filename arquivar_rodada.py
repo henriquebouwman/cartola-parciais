@@ -70,12 +70,18 @@ def montar_linhas(rodada, confrontos, atletas_pont, atl_meta, clubes, pesos):
                 tem_jogador = True
                 meta = atl_meta.get(aid, {})
                 info_pont = atletas_pont.get(str(aid)) or atletas_pont.get(aid) or {}
-                scout = info_pont.get("scout", {}) if isinstance(info_pont, dict) else {}
+                if not isinstance(info_pont, dict):
+                    info_pont = {}
+                scout = info_pont.get("scout", {})
                 pts = round(parcial(scout, pesos), 2)
                 total += pts
-                clube = clubes.get(meta.get("clube_id"), {})
-                linhas.append([participante, meta.get("apelido", str(aid)),
-                               POSICOES.get(meta.get("posicao_id"), ""),
+                # Fallback para /atletas/pontuados quando o mercado vem vazio (mercado fechado).
+                apelido = meta.get("apelido") or info_pont.get("apelido") or str(aid)
+                posicao_id = meta.get("posicao_id") or info_pont.get("posicao_id")
+                clube_id = meta.get("clube_id") or info_pont.get("clube_id")
+                clube = clubes.get(clube_id, {}) if clube_id else {}
+                linhas.append([participante, apelido,
+                               POSICOES.get(posicao_id, ""),
                                clube.get("abreviacao", ""), pts])
             if tem_jogador:
                 linhas.append([participante, "TOTAL", "", "", round(total, 2)])

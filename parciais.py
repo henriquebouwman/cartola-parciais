@@ -887,6 +887,10 @@ def limpar_escalacao_salva() -> None:
         ):
             del st.session_state[key]
     st.session_state["escalacao_carregada"] = False
+    try:
+        carregar_estado_cache.clear()  # exibição reflete o "limpar" imediatamente
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ---------------------------------------------------------------------------
