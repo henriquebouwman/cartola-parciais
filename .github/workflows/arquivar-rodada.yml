@@ -20,4 +20,4 @@ jobs:
         env:
           GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
           GSHEETS_KEY: ${{ secrets.GSHEETS_KEY }}
-          GSHEETS_WORKSHEET: estado
+          GSHEETS_WORKSHEET: "escalacao atual"

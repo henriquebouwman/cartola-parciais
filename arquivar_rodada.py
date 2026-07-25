@@ -108,7 +108,12 @@ def main():
     sh = gc.open_by_key(os.environ["GSHEETS_KEY"])
 
     # Escalações salvas pelo app
-    ws_estado = sh.worksheet(os.environ.get("GSHEETS_WORKSHEET", "estado"))
+    nome_estado = os.environ.get("GSHEETS_WORKSHEET", "estado")
+    titulos = [w.title for w in sh.worksheets()]
+    if nome_estado not in titulos:
+        print(f"Aba de estado '{nome_estado}' ainda não existe (o app não salvou nada). Nada a arquivar.")
+        return
+    ws_estado = sh.worksheet(nome_estado)
     estado = json.loads(ws_estado.acell("A1").value or "{}")
     confrontos = estado.get("confrontos", {}) or {}
     if not confrontos:
