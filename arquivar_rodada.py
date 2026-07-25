@@ -1,14 +1,16 @@
-"""Arquiva a rodada encerrada numa aba `rodada{N}` do Google Sheets.
+"""Arquiva a rodada numa aba `rodada{N}` do Google Sheets, de forma acertiva.
 
-Pensado para rodar via GitHub Actions (cron), independente do app estar aberto:
-- Lê as escalações que o app salvou na aba `estado` do Sheets.
-- Busca as pontuações finais na API do Cartola (só quando a rodada está
-  encerrada: mercado fechado + todos os jogos terminados).
-- Calcula a parcial de cada jogador pelos pesos da liga (scouts_pontuacao.json).
-- Cria a aba `rodada{N}` com, por time: participante (nome do time), jogador,
-  posição, clube e parcial — mais o total de cada time.
+Rodar via GitHub Actions (cron de hora em hora), independente do app estar aberto.
 
-Idempotente: se a aba `rodada{N}` já existir, não faz nada.
+**Estratégia de captura** (o Cartola ajusta pontuações mesmo após os jogos):
+enquanto o **mercado está fechado** (rodada em andamento/encerrando) e há
+pontuações, o script **sobrescreve** a aba `rodada{N}` a cada execução. Assim,
+a última gravação antes de o mercado reabrir — com o cron de hora em hora, ≤ 1h
+antes da abertura — reflete as pontuações já ajustadas/finais. Quando o mercado
+reabre (`status_mercado = 1`), o script não escreve mais e a aba fica congelada.
+
+Cada linha: participante (nome do time no app), jogador, posição, clube e a
+parcial (Σ scout × peso da liga), com o total de cada time.
 
 Variáveis de ambiente (GitHub Secrets):
   GCP_SERVICE_ACCOUNT  -> JSON da conta de serviço (string)
@@ -27,33 +29,21 @@ API = "https://api.cartola.globo.com"
 BASE_DIR = pathlib.Path(__file__).resolve().parent
 POSICOES = {1: "GOL", 2: "LAT", 3: "ZAG", 4: "MEI", 5: "ATA"}
 
-ENCERRADO = ["encerr", "fim", "final", "terminad"]
-
 
 def get_json(url):
-    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
-    r.raise_for_status()
-    return r.json()
+    """Retorna o JSON ou None (rede/resposta inválida — comum quando o mercado abre)."""
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+        r.raise_for_status()
+        return r.json()
+    except Exception as exc:  # noqa: BLE001
+        print(f"Aviso: falha ao acessar {url}: {exc}")
+        return None
 
 
 def carregar_pesos():
     with open(BASE_DIR / "scouts_pontuacao.json", "r", encoding="utf-8") as f:
         return {str(k): float(v) for k, v in json.load(f).items()}
-
-
-def jogo_encerrado(p):
-    for k in ("status_transmissao_tr", "periodo_tr", "status", "periodo"):
-        v = p.get(k)
-        if isinstance(v, str) and any(x in v.lower() for x in ENCERRADO):
-            return True
-    return False
-
-
-def rodada_encerrada(partidas):
-    lista = partidas.get("partidas") or []
-    if not lista:
-        return False
-    return all(jogo_encerrado(p) for p in lista)
 
 
 def parcial(scout, pesos):
@@ -62,58 +52,10 @@ def parcial(scout, pesos):
     return sum(float(q) * pesos.get(k, 0.0) for k, q in scout.items())
 
 
-def main():
-    status = get_json(f"{API}/mercado/status")
-    if status.get("status_mercado") != 2:
-        print("Mercado aberto (rodada não está em andamento/encerramento). Nada a fazer.")
-        return
-
-    partidas = get_json(f"{API}/partidas")
-    if not rodada_encerrada(partidas):
-        print("Rodada ainda não encerrada (há jogos em andamento). Nada a fazer.")
-        return
-
-    pontuados = get_json(f"{API}/atletas/pontuados")
-    atletas_pont = pontuados.get("atletas", {}) or {}
-    rodada = pontuados.get("rodada") or status.get("rodada_atual")
-    if not rodada:
-        print("Não foi possível determinar o número da rodada.")
-        return
-
-    # Conexão com o Sheets (import tardio: as checagens acima não precisam do gspread)
-    import gspread
-    info = json.loads(os.environ["GCP_SERVICE_ACCOUNT"])
-    gc = gspread.service_account_from_dict(info)
-    sh = gc.open_by_key(os.environ["GSHEETS_KEY"])
-
-    aba = f"rodada{rodada}"
-    if aba in [w.title for w in sh.worksheets()]:
-        print(f"Aba '{aba}' já existe — nada a fazer (idempotente).")
-        return
-
-    # Escalações salvas pelo app
-    ws_estado = sh.worksheet(os.environ.get("GSHEETS_WORKSHEET", "estado"))
-    estado = json.loads(ws_estado.acell("A1").value or "{}")
-    confrontos = estado.get("confrontos", {}) or {}
-    if not confrontos:
-        print("Nenhuma escalação salva na aba de estado. Nada a arquivar.")
-        return
-
-    # Metadados dos atletas e clubes
-    mercado = get_json(f"{API}/atletas/mercado")
-    atl_meta = {a.get("atleta_id"): a for a in mercado.get("atletas", []) if a.get("atleta_id")}
-    clubes = {}
-    for k, v in (mercado.get("clubes", {}) or {}).items():
-        try:
-            clubes[int(k)] = v
-        except (TypeError, ValueError):
-            pass
-
-    pesos = carregar_pesos()
+def montar_linhas(rodada, confrontos, atletas_pont, atl_meta, clubes, pesos):
     quando = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    linhas = [[f"Rodada {rodada} — arquivado em {quando}"],
+    linhas = [[f"Rodada {rodada} — atualizado em {quando} (mercado fechado)"],
               ["Participante", "Jogador", "Posição", "Clube", "Parcial"]]
-
     for n in sorted(confrontos, key=lambda x: int(x)):
         conf = confrontos[n] or {}
         for lado in ("a", "b"):
@@ -138,10 +80,64 @@ def main():
             if tem_jogador:
                 linhas.append([participante, "TOTAL", "", "", round(total, 2)])
         linhas.append([])  # separador entre confrontos
+    return linhas
 
-    ws = sh.add_worksheet(title=aba, rows=len(linhas) + 5, cols=6)
+
+def main():
+    status = get_json(f"{API}/mercado/status")
+    if not status:
+        print("Sem status do mercado. Nada a fazer.")
+        return
+    if status.get("status_mercado") != 2:
+        print("Mercado aberto — histórico da rodada já está congelado. Nada a fazer.")
+        return
+
+    pontuados = get_json(f"{API}/atletas/pontuados")
+    atletas_pont = (pontuados or {}).get("atletas", {}) or {}
+    if not atletas_pont:
+        print("Mercado fechado, mas ainda sem pontuações (rodada não começou). Nada a fazer.")
+        return
+    rodada = pontuados.get("rodada") or status.get("rodada_atual")
+    if not rodada:
+        print("Não foi possível determinar o número da rodada.")
+        return
+
+    # Conexão com o Sheets (import tardio: as checagens acima não precisam do gspread)
+    import gspread
+    gc = gspread.service_account_from_dict(json.loads(os.environ["GCP_SERVICE_ACCOUNT"]))
+    sh = gc.open_by_key(os.environ["GSHEETS_KEY"])
+
+    # Escalações salvas pelo app
+    ws_estado = sh.worksheet(os.environ.get("GSHEETS_WORKSHEET", "estado"))
+    estado = json.loads(ws_estado.acell("A1").value or "{}")
+    confrontos = estado.get("confrontos", {}) or {}
+    if not confrontos:
+        print("Nenhuma escalação salva na aba de estado. Nada a arquivar.")
+        return
+
+    # Metadados dos atletas e clubes
+    mercado = get_json(f"{API}/atletas/mercado") or {}
+    atl_meta = {a.get("atleta_id"): a for a in mercado.get("atletas", []) if a.get("atleta_id")}
+    clubes = {}
+    for k, v in (mercado.get("clubes", {}) or {}).items():
+        try:
+            clubes[int(k)] = v
+        except (TypeError, ValueError):
+            pass
+
+    pesos = carregar_pesos()
+    linhas = montar_linhas(rodada, confrontos, atletas_pont, atl_meta, clubes, pesos)
+
+    # Sobrescreve (ou cria) a aba rodada{N}. A última gravação antes da reabertura
+    # do mercado = parciais já ajustadas.
+    aba = f"rodada{rodada}"
+    if aba in [w.title for w in sh.worksheets()]:
+        ws = sh.worksheet(aba)
+        ws.clear()
+    else:
+        ws = sh.add_worksheet(title=aba, rows=len(linhas) + 10, cols=6)
     ws.update(values=linhas, range_name="A1")
-    print(f"✅ Aba '{aba}' criada com {len(linhas)} linhas.")
+    print(f"✅ Aba '{aba}' atualizada ({len(linhas)} linhas).")
 
 
 if __name__ == "__main__":

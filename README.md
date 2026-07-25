@@ -40,9 +40,11 @@ streamlit run parciais.py
 
 ## Arquivamento automático de rodadas (GitHub Actions)
 
-O script `arquivar_rodada.py` grava, numa aba **`rodada{N}`** da mesma planilha, o **retrato final de cada rodada**: por time (participante = nome do time no app), a escalação com a parcial de cada jogador (posição, clube, pontos) e o total do time.
+O script `arquivar_rodada.py` grava, numa aba **`rodada{N}`** da mesma planilha, o **retrato de cada rodada**: por time (participante = nome do time no app), a escalação com a parcial de cada jogador (posição, clube, pontos) e o total do time.
 
-Como roda sozinho (o Streamlit Cloud não tem agendador), quem dispara é o workflow `.github/workflows/arquivar-rodada.yml` — de hora em hora. Ele só grava quando a **rodada está encerrada** (mercado fechado + todos os jogos terminados) e ignora se a aba `rodada{N}` já existe (idempotente). As escalações vêm da aba `estado` do Sheets — ou seja, **exige a persistência em Google Sheets ligada** no app.
+**Captura acertiva:** como o Cartola ajusta pontuações mesmo depois dos jogos, o script **sobrescreve** a aba `rodada{N}` a cada execução **enquanto o mercado está fechado** (rodada em andamento/encerrando). Com o cron de hora em hora, a **última gravação antes de o mercado reabrir (≤ 1h)** reflete as pontuações já ajustadas/finais. Quando o mercado reabre, o script para de escrever e a aba fica **congelada** no valor final.
+
+Quem dispara é o workflow `.github/workflows/arquivar-rodada.yml` (de hora em hora), independente do app estar aberto. As escalações vêm da aba `estado` do Sheets — ou seja, **exige a persistência em Google Sheets ligada** no app.
 
 **Configuração (uma vez):** em *GitHub → repositório → Settings → Secrets and variables → Actions*, crie:
 
