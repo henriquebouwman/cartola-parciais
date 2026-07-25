@@ -1403,22 +1403,19 @@ def main() -> None:
                     "para proteger os dados. Clique em 'Atualizar parciais' para tentar de novo."
                 )
 
-            # ---- edição liberada só com o mercado ABERTO (antes do fechamento) ----
-            editaveis = (
-                [n for n in cfg["participantes"] if pode_editar(n, papel, editor)]
-                if mercado_aberto else []
-            )
+            # ---- edição liberada com o mercado aberto OU fechado ----
+            editaveis = [n for n in cfg["participantes"] if pode_editar(n, papel, editor)]
             editados: Dict[str, Dict] = {}
-            if mercado_aberto and editaveis:
+            if editaveis:
                 titulo_secao("Sua escalação" if papel == "participante" else "Editar escalações")
-                st.caption("Monte ou ajuste sua escalação — dá para editar até o mercado fechar.")
+                st.caption("Monte ou ajuste sua escalação.")
                 for nome in editaveis:
                     i = cfg["participantes"].index(nome)
                     with st.expander(apel.get(nome, nome), icon=":material/shield_person:", expanded=(papel == "participante")):
                         editados[nome] = render_editor_participante(
                             f"p{i}", esc_remoto.get(nome, {}), opcoes, id_para_label
                         )
-            elif mercado_aberto:
+            else:
                 st.markdown(
                     html_banner(
                         "lock", "Somente leitura",
