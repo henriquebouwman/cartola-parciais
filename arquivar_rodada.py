@@ -115,10 +115,42 @@ def main():
         return
     ws_estado = sh.worksheet(nome_estado)
     estado = json.loads(ws_estado.acell("A1").value or "{}")
-    confrontos = estado.get("confrontos", {}) or {}
-    if not confrontos:
+    escalacoes = estado.get("escalacoes", {}) or {}
+    if not escalacoes:
         print("Nenhuma escalação salva na aba de estado. Nada a arquivar.")
         return
+
+    # Config da planilha: apelidos (aba participantes) + tabela de confrontos.
+    apelidos = {}
+    if "participantes" in titulos:
+        for row in sh.worksheet("participantes").get_all_values()[1:]:
+            if len(row) >= 2 and str(row[1]).strip():
+                nome = str(row[1]).strip()
+                apelidos[nome] = (str(row[2]).strip() if len(row) >= 3 and str(row[2]).strip()
+                                  else nome)
+
+    pares = []
+    if "confrontos" in titulos:
+        for row in sh.worksheet("confrontos").get_all_values()[1:]:
+            if not row or not str(row[0]).strip().isdigit():
+                continue
+            if int(str(row[0]).strip()) != int(rodada):
+                continue
+            cells = [str(c).strip() for c in row[1:]]
+            pares = [(cells[i], cells[i + 1]) for i in range(0, 6, 2)
+                     if i + 1 < len(cells) and cells[i] and cells[i + 1]]
+            break
+    if not pares:
+        print(f"Sem confrontos configurados para a rodada {rodada}. Nada a arquivar.")
+        return
+
+    confrontos = {}
+    for i, (a, b) in enumerate(pares, start=1):
+        ea, eb = escalacoes.get(a) or {}, escalacoes.get(b) or {}
+        confrontos[str(i)] = {
+            "a": {"nome": apelidos.get(a, a), "selecao": ea.get("selecao", {}) or {}},
+            "b": {"nome": apelidos.get(b, b), "selecao": eb.get("selecao", {}) or {}},
+        }
 
     # Metadados dos atletas e clubes
     mercado = get_json(f"{API}/atletas/mercado") or {}

@@ -7,12 +7,13 @@ App [Streamlit](https://streamlit.io/) de uma **liga de fantasy (draft)** do Car
 - Auto-refresh a cada 10 minutos.
 - Três abas: **Ao vivo** (placar), **Histórico** (cada rodada arquivada) e **Classificação** do turno (V, E, D, pontos feitos e sofridos — ordena por vitórias → empates → pontos feitos → menos pontos sofridos). Quando incluem a **rodada em andamento**, sinalizam que é **parcial**.
 - **Configuração centralizada na planilha** (criada na 1ª execução, editável direto no Sheets; o app relê a cada ~2 min):
-  - **`participantes`** — `Posição | Nome | Apelido | Senha` (o **apelido** é o que aparece no dash).
-  - **`confrontos`** — `Rodada | Casa 1 | Fora 1 | Casa 2 | Fora 2 | Casa 3 | Fora 3` (a tabela do turno).
+  - **`participantes`** — `Posição | Nome | Apelido | Senha` (o **apelido** é o que aparece no dash; a **senha** deixa aquele participante editar só o seu time).
+  - **`confrontos`** — `Rodada | Casa 1 | Fora 1 | Casa 2 | Fora 2 | Casa 3 | Fora 3` (a tabela do turno; os confrontos da rodada atual são montados por ela).
   - **`config`** — `rodada_inicial`, `rodada_final` (range da classificação/histórico) e `senha_master`.
+- **Acesso por senha (na barra lateral):** sem senha o app é **somente-leitura**; a **senha do participante** libera editar **apenas o time dele**; a **senha master** libera **editar todos os times** + as ações de admin. Cada participante escala pela sua senha e o placar/arquivamento seguem a tabela de confrontos.
 - Persistência em Google Sheets (via secrets do Streamlit).
 
-Na sidebar há uma seção **🧪 Teste / Admin** (temporária) para: recriar as abas de config no formato padrão, gerar **rodadas fake** (marcadas `[TESTE]`) e apagar só essas rodadas de teste.
+Na sidebar (logado como **master**) há uma seção **🧪 Teste / Admin** (temporária) para: recriar as abas de config no formato padrão, gerar **rodadas fake** (marcadas `[TESTE]`) e apagar só essas rodadas de teste.
 
 Fonte de dados: API pública do Cartola (`https://api.cartola.globo.com`).
 
@@ -28,7 +29,7 @@ streamlit run parciais.py
 ## Configuração
 
 - **`scouts_pontuacao.json`** — mapa `código do scout → peso` da sua liga (ex.: `"G": 8.0`, `"CA": -2.0`). Já vem preenchido; edite se sua liga usar outra pontuação.
-- **Senha / Google Sheets (opcional)** — copie `.streamlit/secrets.toml.example` para `.streamlit/secrets.toml` e preencha. Sem esses secrets, o app é editável por qualquer um e a escalação é salva apenas localmente (`escalacao_salva.json`, efêmero).
+- **Google Sheets (opcional)** — copie `.streamlit/secrets.toml.example` para `.streamlit/secrets.toml` e preencha `[gsheets]`/`[gcp_service_account]`. Sem esses secrets a escalação é salva apenas localmente (`escalacao_salva.json`, efêmero) e, sem planilha, não há senhas cadastradas: o app fica somente-leitura. As **senhas** (participantes e master) ficam na planilha, não nos secrets.
 
 ## Deploy no Streamlit Community Cloud
 
@@ -53,7 +54,7 @@ O script `arquivar_rodada.py` grava, numa aba **`rodada{N}`** da mesma planilha,
 
 Quem dispara é o workflow `.github/workflows/arquivar-rodada.yml` (de hora em hora), independente do app estar aberto. As escalações vêm da aba `estado` do Sheets — ou seja, **exige a persistência em Google Sheets ligada** no app.
 
-Há também um botão **"Arquivar rodada agora"** na sidebar do app (aparece só com a **edição liberada pela senha** e o Sheets configurado), para arquivar sob demanda a rodada atual — convive com o robô automático (ambos gravam/atualizam a mesma aba `rodada{N}`).
+Há também um botão **"Arquivar rodada agora"** na sidebar do app (aparece só para o **master** com o Sheets configurado), para arquivar sob demanda a rodada atual — convive com o robô automático (ambos gravam/atualizam a mesma aba `rodada{N}`).
 
 **Configuração (uma vez):** em *GitHub → repositório → Settings → Secrets and variables → Actions*, crie:
 

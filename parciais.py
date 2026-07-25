@@ -720,13 +720,9 @@ def limpar_escalacao_salva() -> None:
 
     for key in list(st.session_state.keys()):
         if (
-            key.startswith("c")
-            or key.startswith("nome_")
-            or key.startswith("formacao_")
-            or key in (
-                "num_confrontos", "_ultimo_salvo",
-                "_base_conf", "_base_num", "dados_salvos",
-            )
+            key.startswith("formacao_")
+            or (key[:1] == "p" and key[1:2].isdigit())  # slots pX_POS_IDX dos editores
+            or key in ("_base_esc", "_ultimo_salvo", "dados_salvos", "escalacoes")
         ):
             del st.session_state[key]
     st.session_state["escalacao_carregada"] = False
@@ -985,20 +981,77 @@ def render_editor_time(
     return nome, formacao, selecao, ids
 
 
+def render_editor_participante(prefixo, salvo, opcoes, id_para_label) -> Dict:
+    """Editor de formação + escalação de UM participante (sem campo de nome)."""
+    formacao_key = f"formacao_{prefixo}"
+    if formacao_key not in st.session_state:
+        salva = (salvo or {}).get("formacao")
+        st.session_state[formacao_key] = salva if salva in FORMACOES else "4-3-3"
+    formacao = st.selectbox("Formação", list(FORMACOES.keys()), key=formacao_key)
+
+    selecao_salva = (salvo or {}).get("selecao", {}) or {}
+    selecao: Dict[str, Optional[int]] = {}
+    ids: List[int] = []
+    for pos, idx in listar_slots_com_indices(FORMACOES[formacao]):
+        chave_slot = f"{pos}_{idx}"
+        state_key = f"{prefixo}_{pos}_{idx}"
+        salvo_id = selecao_salva.get(chave_slot)
+        opcoes_ids = [0] + opcoes.get(pos, [])
+        if salvo_id and salvo_id not in opcoes_ids:
+            opcoes_ids.append(salvo_id)
+        if st.session_state.get(state_key) not in opcoes_ids:
+            st.session_state[state_key] = salvo_id if salvo_id in opcoes_ids else 0
+        atleta_id = st.selectbox(
+            f"{pos} {idx}", options=opcoes_ids,
+            format_func=lambda x: "-" if x == 0 else id_para_label.get(x, str(x)),
+            key=state_key,
+        )
+        selecao[chave_slot] = atleta_id or None
+        if atleta_id:
+            ids.append(atleta_id)
+    if len(ids) != len(set(ids)):
+        st.warning("Jogador repetido nesta escalação.")
+    return {"formacao": formacao, "selecao": selecao}
+
+
+def confrontos_da_rodada(rodada, cfg, escalacoes) -> Dict[str, Dict]:
+    """Monta {confronto: {a, b}} da rodada pela tabela + escalações; nome = apelido."""
+    pares = cfg.get("confrontos", {}).get(rodada, [])
+    apelido = {n: a for n, a in zip(cfg.get("participantes", []), cfg.get("apelidos", []))}
+    out: Dict[str, Dict] = {}
+    for i, (a, b) in enumerate(pares, start=1):
+        ea, eb = escalacoes.get(a) or {}, escalacoes.get(b) or {}
+        out[str(i)] = {
+            "a": {"nome": apelido.get(a, a), "participante": a,
+                  "formacao": ea.get("formacao"), "selecao": ea.get("selecao", {}) or {}},
+            "b": {"nome": apelido.get(b, b), "participante": b,
+                  "formacao": eb.get("formacao"), "selecao": eb.get("selecao", {}) or {}},
+        }
+    return out
+
+
+def identificar_papel(senha, cfg) -> Tuple[Optional[str], Optional[str]]:
+    """Retorna (papel, participante). papel: 'master' | 'participante' | None."""
+    senha = (senha or "").strip()
+    if not senha:
+        return None, None
+    if cfg.get("senha_master") and senha == cfg["senha_master"]:
+        return "master", None
+    for nome, s in zip(cfg.get("participantes", []), cfg.get("senhas", [])):
+        if s and senha == s:
+            return "participante", nome
+    return None, None
+
+
+def pode_editar(nome, papel, editor) -> bool:
+    return papel == "master" or (papel == "participante" and editor == nome)
+
+
 # ---------------------------------------------------------------------------
 # Seguranca / autenticacao
 # ---------------------------------------------------------------------------
-def senha_app() -> Optional[str]:
-    """Le a senha de edicao dos secrets ([app].senha ou senha). None = sem protecao."""
-    try:
-        sec = st.secrets
-        if "app" in sec and sec["app"].get("senha"):
-            return str(sec["app"]["senha"])
-        if "senha" in sec:
-            return str(sec["senha"])
-    except Exception:  # noqa: BLE001
-        pass
-    return None
+# A autenticação é por senha vinda da planilha (aba `participantes.Senha` e
+# `config.senha_master`) — ver identificar_papel()/pode_editar() mais acima.
 
 
 def ids_da_selecao(selecao: Optional[Dict]) -> List[int]:
@@ -1046,42 +1099,21 @@ def main() -> None:
 
     _auto_refresh()
 
-    if "escalacao_carregada" not in st.session_state:
-        salvos, leitura_ok = carregar_estado()
-        st.session_state.dados_salvos = salvos
-        st.session_state.leitura_ok = leitura_ok
-        if "num_confrontos" not in st.session_state:
-            st.session_state.num_confrontos = int(salvos.get("num_confrontos", 1) or 1)
-        st.session_state.escalacao_carregada = True
+    # Config (participantes, senhas, confrontos, range) — vem da planilha.
+    cfg = carregar_config()
+    apel = {n: a for n, a in zip(cfg["participantes"], cfg["apelidos"])}
 
-    dados_salvos = st.session_state.get("dados_salvos", {})
-    confrontos_salvos = (
-        dados_salvos.get("confrontos", {}) if isinstance(dados_salvos, dict) else {}
-    )
+    # Papel do usuário: 'master' (edita tudo) | 'participante' (só o seu) | None (leitura).
+    if "papel" not in st.session_state:
+        st.session_state.papel = None
+        st.session_state.editor = None
+    papel = st.session_state.papel
+    editor = st.session_state.editor
 
-    senha = senha_app()
-    if "autorizado" not in st.session_state:
-        st.session_state.autorizado = senha is None  # sem senha = sem protecao
-    autorizado = bool(st.session_state.autorizado)
-
-    @st.dialog("Habilitar edição")
-    def _dialogo_senha():
-        st.write("Digite a senha para liberar a edição dos confrontos.")
-        pwd = st.text_input("Senha", type="password", key="dlg_senha")
-        col_ok, col_cancel = st.columns(2)
-        if col_ok.button("Entrar", type="primary", use_container_width=True):
-            if pwd == senha:
-                st.session_state.autorizado = True
-                st.rerun()
-            else:
-                st.error("Senha incorreta.")
-        if col_cancel.button("Cancelar", use_container_width=True):
-            st.rerun()
-
-    @st.dialog("Apagar tudo?")
+    @st.dialog("Apagar escalações?")
     def _dialogo_limpar():
         st.warning(
-            "Isso vai apagar TODAS as escalações salvas (de todos os confrontos). "
+            "Isso vai apagar TODAS as escalações salvas (de todos os participantes). "
             "Esta ação não pode ser desfeita."
         )
         col_sim, col_nao = st.columns(2)
@@ -1096,67 +1128,57 @@ def main() -> None:
         if col_nao.button("Cancelar", use_container_width=True):
             st.rerun()
 
-    abrir_dialogo = False
     abrir_limpar = False
     arquivar_agora = False
     resetar_cfg = gerar_fake = apagar_fake = False
     with st.sidebar:
-        st.header("Configurações")
-        if senha is not None:
-            if autorizado:
-                st.success("Edição liberada.")
-                if st.button(
-                    "🔒 Bloquear edição",
-                    use_container_width=True,
-                    key="btn_bloquear",
-                ):
-                    st.session_state.autorizado = False
+        st.header("Acesso")
+        if papel is None:
+            pwd = st.text_input("Senha", type="password", key="login_senha")
+            if st.button("Entrar", type="primary", use_container_width=True, key="btn_login"):
+                p, e = identificar_papel(pwd, cfg)
+                if p is None:
+                    st.error("Senha inválida.")
+                else:
+                    st.session_state.papel = p
+                    st.session_state.editor = e
+                    st.session_state.pop("_base_esc", None)
                     st.rerun()
-            else:
-                if st.button(
-                    "🔓 Habilitar edição",
-                    type="primary",
-                    use_container_width=True,
-                    key="btn_habilitar",
-                ):
-                    abrir_dialogo = True
-
-        if autorizado:
-            num = int(
-                st.number_input(
-                    "Quantidade de confrontos",
-                    min_value=1,
-                    max_value=MAX_CONFRONTOS,
-                    step=1,
-                    key="num_confrontos",
-                )
+            st.caption(
+                "Sem senha: somente leitura. O **master** edita todos os times; "
+                "cada **participante** edita apenas o seu."
             )
         else:
-            num = int(st.session_state.get("num_confrontos", 1) or 1)
-            st.caption(f"{num} confronto(s) — somente leitura")
+            quem = (
+                "Master — edita tudo" if papel == "master"
+                else f"{apel.get(editor, editor)} — edita só o seu time"
+            )
+            st.success(f"Logado: {quem}")
+            if st.button("Sair", use_container_width=True, key="btn_logout"):
+                st.session_state.papel = None
+                st.session_state.editor = None
+                st.session_state.pop("_base_esc", None)
+                st.rerun()
 
         st.divider()
         if st.button("Atualizar parciais", use_container_width=True, key="btn_atualizar"):
             st.cache_data.clear()
             st.rerun()
-        if autorizado:
-            if st.button("Limpar tudo", use_container_width=True, key="btn_limpar"):
+
+        if papel == "master":
+            if st.button("Limpar escalações", use_container_width=True, key="btn_limpar"):
                 abrir_limpar = True
             if _gsheets_configurado():
                 if st.button("Arquivar rodada agora", use_container_width=True, key="btn_arquivar"):
                     arquivar_agora = True
+                with st.expander("🧪 Teste / Admin"):
+                    if st.button("Recriar abas de config", use_container_width=True, key="btn_reset_cfg"):
+                        resetar_cfg = True
+                    if st.button("Gerar rodadas fake", use_container_width=True, key="btn_fake"):
+                        gerar_fake = True
+                    if st.button("Apagar rodadas de teste", use_container_width=True, key="btn_del_fake"):
+                        apagar_fake = True
 
-        if _gsheets_configurado():
-            with st.expander("🧪 Teste / Admin"):
-                if st.button("Recriar abas de config", use_container_width=True, key="btn_reset_cfg"):
-                    resetar_cfg = True
-                if st.button("Gerar rodadas fake", use_container_width=True, key="btn_fake"):
-                    gerar_fake = True
-                if st.button("Apagar rodadas de teste", use_container_width=True, key="btn_del_fake"):
-                    apagar_fake = True
-
-    if abrir_dialogo:
-        _dialogo_senha()
     if abrir_limpar:
         _dialogo_limpar()
 
@@ -1182,24 +1204,23 @@ def main() -> None:
             st.toast("Erro na ação de teste.", icon="❌")
             st.error(f"Erro na ação de teste: {exc}")
 
-    cfg = carregar_config()
-
     # Rodada em andamento (mercado fechado): dados dela são PARCIAIS até o mercado reabrir.
     _ms = carregar_mercado_status() or {}
-    rodada_parcial = _ms.get("rodada_atual") if _ms.get("status_mercado") == 2 else None
+    rodada_atual = _ms.get("rodada_atual")
+    rodada_parcial = rodada_atual if _ms.get("status_mercado") == 2 else None
 
     aba_vivo, aba_hist, aba_class = st.tabs(["🟢 Ao vivo", "📜 Histórico", "🏆 Classificação"])
 
     # ============================ AO VIVO ============================
     with aba_vivo:
-        parciais = carregar_parciais()
         mercado = carregar_mercado()
-        if not parciais or not mercado:
+        if not mercado:
             if arquivar_agora:
-                st.toast("Mercado aberto / sem parciais — nada para arquivar.", icon="⚠️")
-            st.info("Sem parciais no momento (mercado aberto). O placar aparece quando a rodada começa. Veja o histórico e a classificação nas outras abas.")
+                st.toast("Sem dados do mercado — nada para arquivar.", icon="⚠️")
+            st.error("Não foi possível carregar o mercado do Cartola. Tente 'Atualizar parciais' na barra lateral.")
         else:
-            partidas = carregar_partidas()  # usado para escudos das selecoes (opcional)
+            parciais = carregar_parciais() or {}
+            partidas = carregar_partidas()  # escudos das selecoes (opcional)
             pesos = carregar_pesos_scouts()
 
             atletas = mercado.get("atletas", [])
@@ -1210,139 +1231,119 @@ def main() -> None:
             status_jogos = mapa_status_jogos(partidas)
             opcoes, id_para_label = opcoes_por_posicao(atletas, clubes_por_id)
 
-            dados_confrontos: Dict[int, Dict] = {}
-            confrontos_para_salvar: Dict[str, Dict] = {}
+            rodada = rodada_atual
+            pares = cfg.get("confrontos", {}).get(rodada, [])
 
-            leitura_ok = bool(st.session_state.get("leitura_ok", True))
+            esc_remoto, leitura_ok = carregar_estado()
+            esc_remoto = dict((esc_remoto or {}).get("escalacoes", {}) or {})
 
-            if autorizado and not leitura_ok:
+            if not rodada:
+                st.warning("Não foi possível determinar a rodada atual pela API do Cartola.")
+            elif not pares:
+                st.warning(f"Sem confrontos configurados para a rodada {rodada} (aba `confrontos` da planilha).")
+
+            if not parciais.get("atletas"):
+                st.info(f"Mercado aberto — monte as escalações da rodada {rodada}. As parciais aparecem quando a rodada começar.")
+
+            if papel is not None and not leitura_ok:
                 st.warning(
                     "Falha ao ler o estado salvo: as edições NÃO serão salvas nesta sessão "
                     "para proteger os dados. Clique em 'Atualizar parciais' para tentar de novo."
                 )
 
-            if autorizado:
-                titulo_secao("Montar / editar times")
+            # ---- editores (cada um só edita o que pode) ----
+            editaveis = [n for n in cfg["participantes"] if pode_editar(n, papel, editor)]
+            editados: Dict[str, Dict] = {}
+            if editaveis:
+                titulo_secao("Sua escalação" if papel == "participante" else "Editar escalações")
+                for nome in editaveis:
+                    i = cfg["participantes"].index(nome)
+                    with st.expander(f"⚽ {apel.get(nome, nome)}", expanded=(papel == "participante")):
+                        editados[nome] = render_editor_participante(
+                            f"p{i}", esc_remoto.get(nome, {}), opcoes, id_para_label
+                        )
             else:
                 st.markdown(
                     "<div class='edit-locked'>"
                     "<div class='ico'>🔒</div>"
-                    "<div><div class='txt'>Edição bloqueada</div>"
-                    "<div class='sub'>Clique em “Habilitar edição” na barra lateral e digite a senha para alterar os confrontos.</div>"
+                    "<div><div class='txt'>Somente leitura</div>"
+                    "<div class='sub'>Entre com a senha na barra lateral para editar a escalação "
+                    "(o master edita todas; cada participante edita a sua).</div>"
                     "</div></div>",
                     unsafe_allow_html=True,
                 )
 
-            for n in range(1, num + 1):
-                salvo_conf = (
-                    confrontos_salvos.get(str(n), {}) if isinstance(confrontos_salvos, dict) else {}
-                )
-                salvo_a, salvo_b = salvo_conf.get("a", {}), salvo_conf.get("b", {})
-                nome_a_pad = salvo_a.get("nome") or f"Time {2 * n - 1}"
-                nome_b_pad = salvo_b.get("nome") or f"Time {2 * n}"
+            # Escalações efetivas: remoto + edições desta sessão.
+            escalacoes = {**esc_remoto, **editados}
 
-                if autorizado:
-                    with st.expander(f"Confronto {n}", expanded=False):
-                        ce_a, ce_b = st.columns(2)
-                        with ce_a:
-                            nome_a, _, sel_a, ids_a = render_editor_time(
-                                f"c{n}_a", nome_a_pad, "4-3-3", salvo_a, opcoes, id_para_label
-                            )
-                        with ce_b:
-                            nome_b, _, sel_b, ids_b = render_editor_time(
-                                f"c{n}_b", nome_b_pad, "4-3-3", salvo_b, opcoes, id_para_label
-                            )
-                    confrontos_para_salvar[str(n)] = {
-                        "a": {"nome": nome_a, "formacao": st.session_state.get(f"formacao_c{n}_a"), "selecao": sel_a},
-                        "b": {"nome": nome_b, "formacao": st.session_state.get(f"formacao_c{n}_b"), "selecao": sel_b},
-                    }
-                else:
-                    nome_a, nome_b = nome_a_pad, nome_b_pad
-                    ids_a = ids_da_selecao(salvo_a.get("selecao"))
-                    ids_b = ids_da_selecao(salvo_b.get("selecao"))
+            # ---- salvar (merge preservando os outros participantes) ----
+            if editados and leitura_ok:
+                if "_base_esc" not in st.session_state:
+                    st.session_state._base_esc = json.loads(json.dumps(editados))
+                base = st.session_state._base_esc
 
-                df_a = montar_tabela_escalacao(ids_a, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
-                df_b = montar_tabela_escalacao(ids_b, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
-                dados_confrontos[n] = {
-                    "nome_a": nome_a, "df_a": df_a, "tot_a": total_time(df_a),
-                    "nome_b": nome_b, "df_b": df_b, "tot_b": total_time(df_b),
-                }
-
-            titulo_secao("Placar ao vivo")
-            ordem = list(range(1, num + 1))
-            for i in range(0, len(ordem), 2):
-                cols = st.columns(2)
-                for col, n in zip(cols, ordem[i:i + 2]):
-                    d = dados_confrontos[n]
-                    with col:
-                        st.markdown(
-                            html_confronto(
-                                n, d["nome_a"], d["df_a"], d["tot_a"],
-                                d["nome_b"], d["df_b"], d["tot_b"],
-                            ),
-                            unsafe_allow_html=True,
-                        )
-
-            # Arquivamento manual da rodada (botão da sidebar, só com edição liberada)
-            if arquivar_agora:
-                rodada_num = (parciais or {}).get("rodada")
-                atletas_pont = (parciais or {}).get("atletas", {}) or {}
-                if not rodada_num or not atletas_pont:
-                    st.toast("Sem parciais disponíveis (mercado aberto?). Nada para arquivar.", icon="⚠️")
-                elif not confrontos_para_salvar:
-                    st.toast("Nenhuma escalação para arquivar.", icon="⚠️")
-                else:
-                    try:
-                        with st.spinner("Arquivando rodada na planilha..."):
-                            linhas = montar_linhas_rodada(
-                                rodada_num, confrontos_para_salvar, parciais,
-                                atletas_por_id, clubes_por_id, pesos,
-                            )
-                            aba = arquivar_rodada_no_sheets(rodada_num, linhas)
-                        st.toast(f"Rodada arquivada na aba '{aba}'.", icon="✅")
-                        st.success(f"Rodada arquivada na aba '{aba}' da planilha.")
-                    except Exception as exc:  # noqa: BLE001
-                        st.toast("Erro ao arquivar a rodada.", icon="❌")
-                        st.error(f"Erro ao arquivar a rodada: {exc}")
-
-            if autorizado and leitura_ok:
-                # Baseline = estado renderizado desta sessao na 1a vez que ela editou.
-                if "_base_conf" not in st.session_state:
-                    st.session_state._base_conf = json.loads(json.dumps(confrontos_para_salvar))
-                    st.session_state._base_num = num
-                base_conf = st.session_state.get("_base_conf", {}) or {}
-                base_num = int(st.session_state.get("_base_num", num) or num)
-
-                def _tot(conf: Dict) -> int:
-                    return sum(
-                        1
-                        for lado in ("a", "b")
-                        for v in ((conf.get(lado, {}) or {}).get("selecao") or {}).values()
-                        if v
-                    )
+                def _n_sel(e) -> int:
+                    return sum(1 for v in ((e or {}).get("selecao") or {}).values() if v)
 
                 mudou: Dict[str, Dict] = {}
-                for n_str, conf in confrontos_para_salvar.items():
-                    if conf != base_conf.get(n_str):
-                        if _tot(conf) == 0 and _tot(base_conf.get(n_str, {}) or {}) > 0:
+                for nome, atual in editados.items():
+                    if atual != base.get(nome):
+                        # nunca zera uma escalação já salva (ex.: mercado sem opções)
+                        if _n_sel(atual) == 0 and _n_sel(esc_remoto.get(nome)) > 0:
                             continue
-                        mudou[n_str] = conf
-                num_mudou = num != base_num
+                        mudou[nome] = atual
+                if mudou:
+                    resc = dict(esc_remoto)
+                    resc.update(mudou)
+                    salvar_escalacao_salva({"escalacoes": resc})
+                    for nome, v in mudou.items():
+                        base[nome] = v
+                    escalacoes = resc
 
-                if mudou or num_mudou:
-                    remoto, ok = carregar_estado()
-                    if ok:
-                        remoto = remoto or {}
-                        rconf = dict(remoto.get("confrontos", {}) or {})
-                        for n_str, conf in mudou.items():
-                            rconf[n_str] = conf
-                            base_conf[n_str] = conf
-                        novo_num = num if num_mudou else int(remoto.get("num_confrontos", num) or num)
-                        novo = {"num_confrontos": novo_num, "confrontos": rconf}
-                        salvar_escalacao_salva(novo)
-                        st.session_state.dados_salvos = novo
-                        st.session_state._base_conf = base_conf
-                        st.session_state._base_num = num if num_mudou else base_num
+            # ---- placar ao vivo (confrontos da rodada pela tabela) ----
+            confrontos = confrontos_da_rodada(rodada, cfg, escalacoes)
+            if confrontos:
+                titulo_secao(f"Placar ao vivo — rodada {rodada}")
+                chaves = sorted(confrontos, key=lambda x: int(x))
+                for i in range(0, len(chaves), 2):
+                    cols = st.columns(2)
+                    for col, n in zip(cols, chaves[i:i + 2]):
+                        c = confrontos[n]
+                        ids_a = ids_da_selecao(c["a"]["selecao"])
+                        ids_b = ids_da_selecao(c["b"]["selecao"])
+                        df_a = montar_tabela_escalacao(ids_a, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
+                        df_b = montar_tabela_escalacao(ids_b, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
+                        with col:
+                            st.markdown(
+                                html_confronto(
+                                    n, c["a"]["nome"], df_a, total_time(df_a),
+                                    c["b"]["nome"], df_b, total_time(df_b),
+                                ),
+                                unsafe_allow_html=True,
+                            )
+
+            # ---- arquivamento manual (só master) ----
+            if arquivar_agora:
+                rodada_num = parciais.get("rodada")
+                if not rodada_num or not parciais.get("atletas"):
+                    st.toast("Sem parciais disponíveis (mercado aberto?). Nada para arquivar.", icon="⚠️")
+                else:
+                    confr_arq = confrontos_da_rodada(rodada_num, cfg, escalacoes)
+                    if not confr_arq:
+                        st.toast(f"Sem confrontos configurados para a rodada {rodada_num}.", icon="⚠️")
+                    else:
+                        try:
+                            with st.spinner("Arquivando rodada na planilha..."):
+                                linhas = montar_linhas_rodada(
+                                    rodada_num, confr_arq, parciais,
+                                    atletas_por_id, clubes_por_id, pesos,
+                                )
+                                aba = arquivar_rodada_no_sheets(rodada_num, linhas)
+                            st.toast(f"Rodada arquivada na aba '{aba}'.", icon="✅")
+                            st.success(f"Rodada arquivada na aba '{aba}' da planilha.")
+                        except Exception as exc:  # noqa: BLE001
+                            st.toast("Erro ao arquivar a rodada.", icon="❌")
+                            st.error(f"Erro ao arquivar a rodada: {exc}")
 
     # ============================ HISTÓRICO ============================
     ini, fim = cfg.get("rodada_ini"), cfg.get("rodada_fim")
