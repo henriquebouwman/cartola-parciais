@@ -232,6 +232,11 @@ CSS = """
       border: 1px solid rgba(0,255,135,.28); border-left: 4px solid #00ff87;
   }
   .banner.hidden .b-ico { color: #00ff87; }
+  .banner.info {
+      background: linear-gradient(90deg, rgba(125,136,150,.12), rgba(125,136,150,0) 90%);
+      border: 1px solid rgba(125,136,150,.28); border-left: 4px solid #7d8896;
+  }
+  .banner.info .b-ico { color: #8b949e; }
   /* Titulo de secao (coerente com o cabecalho dos cards) */
   .sec-title {
       font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
@@ -1498,7 +1503,7 @@ def main() -> None:
 
     with aba_hist:
         titulo_secao("Histórico por rodada")
-        st.caption("Verifique o histórico de confrontos")
+        st.caption("Verifique o histórico de confrontos.")
         if not _gsheets_configurado():
             st.info("Configure o Google Sheets para ver o histórico arquivado.")
         else:
@@ -1507,7 +1512,14 @@ def main() -> None:
                 rodadas = [r for r in _rodadas_disponiveis(sh)
                            if (ini is None or r >= ini) and (fim is None or r <= fim)]
                 if not rodadas:
-                    st.info("Nenhuma rodada arquivada dentro do range configurado.")
+                    st.markdown(
+                        html_banner(
+                            "inbox", "Nenhuma rodada arquivada",
+                            "Nada encontrado dentro do range de rodadas configurado.",
+                            cls="info",
+                        ),
+                        unsafe_allow_html=True,
+                    )
                 else:
                     sel = st.selectbox("Rodada", rodadas, index=len(rodadas) - 1,
                                        format_func=lambda r: f"Rodada {r}")
@@ -1528,7 +1540,14 @@ def main() -> None:
             try:
                 linhas_class, rodadas = calcular_classificacao(_planilha(), ini, fim)
                 if not linhas_class:
-                    st.info("Nenhuma rodada arquivada dentro do range configurado.")
+                    st.markdown(
+                        html_banner(
+                            "inbox", "Nenhuma rodada arquivada",
+                            "Nada encontrado dentro do range de rodadas configurado.",
+                            cls="info",
+                        ),
+                        unsafe_allow_html=True,
+                    )
                 else:
                     if rodada_parcial in rodadas:
                         st.warning(f"Inclui a rodada {rodada_parcial} em andamento — classificação **parcial** (pode mudar até o fim da rodada).", icon=":material/warning:")
