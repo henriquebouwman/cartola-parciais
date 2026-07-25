@@ -86,6 +86,13 @@ ORDEM_POSICAO = {"GOL": 1, "LAT": 2, "ZAG": 3, "MEI": 4, "ATA": 5}
 
 CSS = """
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0');
+  /* Ícones monocromáticos (mesma família dos ícones nativos do Streamlit) */
+  .msym { font-family: 'Material Symbols Rounded'; font-weight: 400; font-style: normal;
+          line-height: 1; vertical-align: -2px; display: inline-block; color: #c9d1d9;
+          -webkit-font-feature-settings: 'liga'; font-feature-settings: 'liga';
+          -webkit-font-smoothing: antialiased; }
+  .clab { color: #6e7681; font-size: 9px; font-weight: 600; margin-left: 5px; letter-spacing: .3px; }
   .block-container { padding-top: 1.5rem; max-width: 1400px; }
   .live-top {
       display: inline-flex; align-items: center; gap: 6px;
@@ -109,7 +116,7 @@ CSS = """
       text-transform: uppercase; margin-bottom: 10px;
   }
   .cc-h .ttl { display: flex; align-items: center; gap: 7px; }
-  .cc-h .ttl::before { content: "\\26BD"; font-size: 13px; }
+  .cc-h .ttl::before { font-family: 'Material Symbols Rounded'; content: "stadium"; font-size: 15px; }
   .cc-live { display: inline-flex; align-items: center; gap: 5px; color: #00ff87; font-size: 9px; }
   /* Barra de comparacao de placar */
   .cc-bar {
@@ -136,7 +143,7 @@ CSS = """
   .tm-score { font-size: 25px; font-weight: 800; color: #9aa4b1; font-variant-numeric: tabular-nums; line-height: 1; }
   .tm.win .tm-name { color: #00ff87; }
   .tm.win .tm-score { color: #00ff87; text-shadow: 0 0 10px rgba(0,255,135,0.45); }
-  .crown { font-size: 11px; margin-left: 4px; }
+  .crown { font-size: 14px; margin-left: 5px; color: #e6edf3; }
   /* Lineup */
   table.lu { width: 100%; border-collapse: collapse; font-size: 12px; }
   table.lu td { padding: 2px 3px; color: #c9d1d9; border: 0; }
@@ -157,7 +164,7 @@ CSS = """
   .sdot.dr { background: #f0746b; box-shadow: 0 0 5px rgba(240,116,107,0.7); }
   .sdot.dn { background: #3a4150; }
   .sdot.blink { animation: pulse 1.4s ease-in-out infinite; }
-  .star { color: #f5c518; margin-left: 3px; font-size: 10px; }
+  .star { color: #e6edf3; margin-left: 4px; font-size: 13px; }
   td.pt { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; width: 46px; }
   td.pt.pos-val { color: #3fd07f; }
   td.pt.neg-val { color: #f0746b; }
@@ -514,22 +521,120 @@ def calcular_classificacao(sh, rodada_ini=None, rodada_fim=None):
     return linhas, rodadas
 
 
+def _parse_rodada(valores) -> List[List[Tuple[str, List[Dict], float]]]:
+    """Transforma a matriz da aba rodada{N} em confrontos [(timeA), (timeB)].
+
+    Cada time = (nome, [ {Jogador, Posição, Clube, Pts} ... ], total).
+    O layout salvo é: título, cabeçalho, linhas de jogador + linha TOTAL por
+    time, com linha em branco separando confrontos.
+    """
+    def _f(x) -> float:
+        try:
+            return float(str(x).replace(",", "."))
+        except (TypeError, ValueError):
+            return 0.0
+
+    times: List[Tuple[str, List[Dict], float]] = []
+    nome_atual, jogadores = None, []
+    for row in valores[2:]:
+        cells = [str(c).strip() for c in row]
+        if not any(cells):
+            continue
+        part = cells[0] if cells else ""
+        jog = cells[1] if len(cells) > 1 else ""
+        if jog.upper() == "TOTAL":
+            total = _f(cells[4]) if len(cells) > 4 else 0.0
+            times.append((part or nome_atual or "", jogadores, total))
+            nome_atual, jogadores = None, []
+        else:
+            nome_atual = part or nome_atual
+            jogadores.append({
+                "Jogador": jog,
+                "Posição": cells[2] if len(cells) > 2 else "",
+                "Clube": cells[3] if len(cells) > 3 else "",
+                "Pts": _f(cells[4]) if len(cells) > 4 and cells[4] else 0.0,
+            })
+    return [times[i:i + 2] for i in range(0, len(times) - 1, 2)]
+
+
+def _html_lineup_hist(jogadores, top_val) -> str:
+    if not jogadores:
+        return "<div class='empty'>Sem jogadores.</div>"
+    rows = []
+    for j in jogadores:
+        pos = escape(str(j.get("Posição", "")))
+        nome = escape(str(j.get("Jogador", "")))
+        clube = escape(str(j.get("Clube", "")))
+        val = float(j.get("Pts", 0) or 0)
+        cls = "pos-val" if val > 0 else ("neg-val" if val < 0 else "")
+        star = ("<span class='msym star'>star</span>"
+                if (top_val is not None and val == top_val and val > 0) else "")
+        clab = f"<span class='clab'>{clube}</span>" if clube else ""
+        rows.append(
+            f"<tr><td class='pos'><span>{pos}</span></td>"
+            f"<td class='nm'>{nome}{clab}{star}</td>"
+            f"<td class='pt {cls}'>{val:.2f}</td></tr>"
+        )
+    return "<table class='lu'>" + "".join(rows) + "</table>"
+
+
+def _html_time_hist(nome, jogadores, total, vencedor, top_val) -> str:
+    win = "win" if vencedor else ""
+    crown = "<span class='msym crown'>emoji_events</span>" if vencedor else ""
+    sub = f"{len(jogadores)} jogadores" if jogadores else "sem escalação"
+    return (
+        f"<div class='tm {win}'>"
+        f"<div class='tm-top'><div class='tm-id'>"
+        f"<div class='tm-name'>{escape(str(nome))}{crown}</div>"
+        f"<div class='tm-sub'>{sub}</div></div>"
+        f"<span class='tm-score'>{total:.2f}</span></div>"
+        f"{_html_lineup_hist(jogadores, top_val)}</div>"
+    )
+
+
+def _html_confronto_hist(k, time_a, time_b) -> str:
+    nome_a, jog_a, tot_a = time_a
+    nome_b, jog_b, tot_b = time_b
+    a_win, b_win = tot_a > tot_b, tot_b > tot_a
+    vals = [float(j.get("Pts", 0) or 0) for j in (jog_a + jog_b)]
+    top_val = max(vals) if vals and max(vals) > 0 else None
+    wa, wb = barra_placar(tot_a, tot_b)
+    if a_win:
+        seg_a, seg_b = "seg-win", "seg-lose"
+    elif b_win:
+        seg_a, seg_b = "seg-lose", "seg-win"
+    else:
+        seg_a = seg_b = "seg-lose"
+    return (
+        f"<div class='cc'>"
+        f"<div class='cc-h'><span class='ttl'>Confronto {k}</span></div>"
+        f"<div class='cc-bar'>"
+        f"<span class='{seg_a}' style='width:{wa:.1f}%'></span>"
+        f"<span class='{seg_b}' style='width:{wb:.1f}%'></span></div>"
+        f"<div class='cc-body'>"
+        f"{_html_time_hist(nome_a, jog_a, tot_a, a_win, top_val)}"
+        f"<div class='cc-div'></div>"
+        f"{_html_time_hist(nome_b, jog_b, tot_b, b_win, top_val)}"
+        f"</div></div>"
+    )
+
+
 def _mostrar_tabela_rodada(valores) -> None:
-    """Renderiza a aba rodada{N} (matriz de valores) como tabela."""
+    """Renderiza a aba rodada{N} como um card por confronto (3 por rodada)."""
     if not valores:
         st.info("Aba vazia.")
         return
     titulo = valores[0][0] if valores[0] else ""
     if titulo:
         st.caption(titulo)
-    header = valores[1] if len(valores) > 1 else []
-    dados = [r for r in valores[2:] if any(str(c).strip() for c in r)]
-    if header and dados:
-        ncol = len(header)
-        dados = [(list(r) + [""] * ncol)[:ncol] for r in dados]
-        st.dataframe(pd.DataFrame(dados, columns=header), width="stretch", hide_index=True)
-    else:
+    confrontos = _parse_rodada(valores)
+    if not confrontos:
         st.info("Sem dados nesta rodada.")
+        return
+    for k, conf in enumerate(confrontos, start=1):
+        if len(conf) < 2:
+            continue
+        st.markdown(_html_confronto_hist(k, conf[0], conf[1]), unsafe_allow_html=True)
 
 
 def _garantir_config(sh) -> None:
@@ -626,8 +731,23 @@ def resetar_config_tabs(sh) -> None:
     _garantir_config(sh)
 
 
+NOMES_FAKE = [
+    "Léo", "Gabriel", "Pedro", "Hulk", "Arrascaeta", "Cano", "Rony", "Everton",
+    "Thiago", "Bruno", "Nino", "Marcos", "Rafael", "Danilo", "Gérson", "Veiga",
+    "Dudu", "Endrick", "Vítor", "Yuri", "Igor", "Caio", "Léo Ortiz", "Wesley",
+    "Guga", "Fábio", "Renato", "Cássio", "Weverton", "Rossi", "John", "Bento",
+    "Kaio", "Lucas", "Matheus", "Paulinho", "Vegetti", "Alerrandro", "Estêvão", "Savinho",
+]
+CLUBES_FAKE = [
+    "FLA", "PAL", "COR", "SAO", "FLU", "GRE", "INT", "ATL", "BOT", "VAS",
+    "CRU", "BAH", "FOR", "JUV", "CAP", "RBB", "CUI", "VIT", "CFC", "BGT",
+]
+# Distribuição de posições de uma escalação 4-3-3.
+POSICOES_FAKE = ["GOL", "LAT", "LAT", "ZAG", "ZAG", "MEI", "MEI", "MEI", "ATA", "ATA", "ATA"]
+
+
 def gerar_rodadas_fake(sh, cfg, rodadas) -> List[int]:
-    """Cria abas rodada{N} FICTÍCIAS (marcadas [TESTE]) para as rodadas dadas."""
+    """Cria abas rodada{N} FICTÍCIAS (marcadas [TESTE]) com jogadores aleatórios."""
     import random
 
     nome2ap = {n: a for n, a in zip(cfg["participantes"], cfg["apelidos"])}
@@ -640,7 +760,14 @@ def gerar_rodadas_fake(sh, cfg, rodadas) -> List[int]:
                   ["Participante", "Jogador", "Posição", "Clube", "Parcial"]]
         for a, b in pares:
             for nome in (a, b):
-                linhas.append([nome2ap.get(nome, nome), "TOTAL", "", "", round(random.uniform(20, 90), 2)])
+                apelido = nome2ap.get(nome, nome)
+                total = 0.0
+                nomes = random.sample(NOMES_FAKE, len(POSICOES_FAKE))
+                for pos, jogador in zip(POSICOES_FAKE, nomes):
+                    pts = round(random.uniform(-2, 14), 2)
+                    total += pts
+                    linhas.append([apelido, jogador, pos, random.choice(CLUBES_FAKE), pts])
+                linhas.append([apelido, "TOTAL", "", "", round(total, 2)])
             linhas.append([])
         aba = f"rodada{r}"
         if aba in [w.title for w in sh.worksheets()]:
@@ -850,7 +977,7 @@ def html_lineup(df: pd.DataFrame, top_val: Optional[float]) -> str:
         blink = " blink" if (st_jogo == "ao_vivo" and cor != "dn") else ""
         dot = f"<span class='sdot {cor}{blink}'></span>"
         star = (
-            "<span class='star'>&#9733;</span>"
+            "<span class='msym star'>star</span>"
             if (top_val is not None and val == top_val and val > 0)
             else ""
         )
@@ -866,7 +993,7 @@ def html_lineup(df: pd.DataFrame, top_val: Optional[float]) -> str:
 
 def html_time(nome, df, total, vencedor, top_val) -> str:
     win = "win" if vencedor else ""
-    crown = "<span class='crown'>&#128081;</span>" if vencedor else ""
+    crown = "<span class='msym crown'>emoji_events</span>" if vencedor else ""
     em_campo = jogadores_em_campo(df)
     tot_sel = 0 if df.empty else len(df)
     sub = f"{em_campo}/{tot_sel} em campo" if tot_sel else "sem escalação"
@@ -1076,9 +1203,9 @@ def titulo_secao(texto: str) -> None:
 # App
 # ---------------------------------------------------------------------------
 def main() -> None:
-    st.set_page_config(page_title="Fantasy Draft", page_icon="🏆", layout="wide")
+    st.set_page_config(page_title="Fantasy Draft", page_icon=":material/stadium:", layout="wide")
     st.markdown(CSS, unsafe_allow_html=True)
-    st.title("🏆 Fantasy Draft")
+    st.title(":material/stadium: Fantasy Draft")
     st.caption(
         "Liga de fantasy (draft) do Cartola — 6 participantes em 3 confrontos por rodada. "
         "Parciais ao vivo (pontuação pelos pesos da liga), histórico por rodada e classificação do turno. "
@@ -1171,7 +1298,7 @@ def main() -> None:
             if _gsheets_configurado():
                 if st.button("Arquivar rodada agora", use_container_width=True, key="btn_arquivar"):
                     arquivar_agora = True
-                with st.expander("🧪 Teste / Admin"):
+                with st.expander("Teste / Admin", icon=":material/science:"):
                     if st.button("Recriar abas de config", use_container_width=True, key="btn_reset_cfg"):
                         resetar_cfg = True
                     if st.button("Gerar rodadas fake", use_container_width=True, key="btn_fake"):
@@ -1198,10 +1325,10 @@ def main() -> None:
                 apagadas = apagar_rodadas_teste(sh_admin)
                 msg = f"Rodadas de teste apagadas: {apagadas or 'nenhuma'}."
             st.cache_data.clear()
-            st.toast(msg, icon="✅")
+            st.toast(msg, icon=":material/check_circle:")
             st.success(msg)
         except Exception as exc:  # noqa: BLE001
-            st.toast("Erro na ação de teste.", icon="❌")
+            st.toast("Erro na ação de teste.", icon=":material/error:")
             st.error(f"Erro na ação de teste: {exc}")
 
     # Rodada em andamento (mercado fechado): dados dela são PARCIAIS até o mercado reabrir.
@@ -1209,14 +1336,18 @@ def main() -> None:
     rodada_atual = _ms.get("rodada_atual")
     rodada_parcial = rodada_atual if _ms.get("status_mercado") == 2 else None
 
-    aba_vivo, aba_hist, aba_class = st.tabs(["🟢 Ao vivo", "📜 Histórico", "🏆 Classificação"])
+    aba_vivo, aba_hist, aba_class = st.tabs([
+        ":material/bolt: Ao vivo",
+        ":material/history: Histórico",
+        ":material/leaderboard: Classificação",
+    ])
 
     # ============================ AO VIVO ============================
     with aba_vivo:
         mercado = carregar_mercado()
         if not mercado:
             if arquivar_agora:
-                st.toast("Sem dados do mercado — nada para arquivar.", icon="⚠️")
+                st.toast("Sem dados do mercado — nada para arquivar.", icon=":material/warning:")
             st.error("Não foi possível carregar o mercado do Cartola. Tente 'Atualizar parciais' na barra lateral.")
         else:
             parciais = carregar_parciais() or {}
@@ -1258,14 +1389,14 @@ def main() -> None:
                 titulo_secao("Sua escalação" if papel == "participante" else "Editar escalações")
                 for nome in editaveis:
                     i = cfg["participantes"].index(nome)
-                    with st.expander(f"⚽ {apel.get(nome, nome)}", expanded=(papel == "participante")):
+                    with st.expander(apel.get(nome, nome), icon=":material/shield_person:", expanded=(papel == "participante")):
                         editados[nome] = render_editor_participante(
                             f"p{i}", esc_remoto.get(nome, {}), opcoes, id_para_label
                         )
             else:
                 st.markdown(
                     "<div class='edit-locked'>"
-                    "<div class='ico'>🔒</div>"
+                    "<div class='ico'><span class='msym'>lock</span></div>"
                     "<div><div class='txt'>Somente leitura</div>"
                     "<div class='sub'>Entre com a senha na barra lateral para editar a escalação "
                     "(o master edita todas; cada participante edita a sua).</div>"
@@ -1326,11 +1457,11 @@ def main() -> None:
             if arquivar_agora:
                 rodada_num = parciais.get("rodada")
                 if not rodada_num or not parciais.get("atletas"):
-                    st.toast("Sem parciais disponíveis (mercado aberto?). Nada para arquivar.", icon="⚠️")
+                    st.toast("Sem parciais disponíveis (mercado aberto?). Nada para arquivar.", icon=":material/warning:")
                 else:
                     confr_arq = confrontos_da_rodada(rodada_num, cfg, escalacoes)
                     if not confr_arq:
-                        st.toast(f"Sem confrontos configurados para a rodada {rodada_num}.", icon="⚠️")
+                        st.toast(f"Sem confrontos configurados para a rodada {rodada_num}.", icon=":material/warning:")
                     else:
                         try:
                             with st.spinner("Arquivando rodada na planilha..."):
@@ -1339,10 +1470,10 @@ def main() -> None:
                                     atletas_por_id, clubes_por_id, pesos,
                                 )
                                 aba = arquivar_rodada_no_sheets(rodada_num, linhas)
-                            st.toast(f"Rodada arquivada na aba '{aba}'.", icon="✅")
+                            st.toast(f"Rodada arquivada na aba '{aba}'.", icon=":material/check_circle:")
                             st.success(f"Rodada arquivada na aba '{aba}' da planilha.")
                         except Exception as exc:  # noqa: BLE001
-                            st.toast("Erro ao arquivar a rodada.", icon="❌")
+                            st.toast("Erro ao arquivar a rodada.", icon=":material/error:")
                             st.error(f"Erro ao arquivar a rodada: {exc}")
 
     # ============================ HISTÓRICO ============================
@@ -1364,7 +1495,7 @@ def main() -> None:
                     sel = st.selectbox("Rodada", rodadas, index=len(rodadas) - 1,
                                        format_func=lambda r: f"Rodada {r}")
                     if sel == rodada_parcial:
-                        st.warning(f"⚠️ Rodada {sel} em andamento — pontuações **parciais** (ainda podem mudar).")
+                        st.warning(f"Rodada {sel} em andamento — pontuações **parciais** (ainda podem mudar).", icon=":material/warning:")
                     _mostrar_tabela_rodada(_ler_rodada(sh, sel))
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Erro ao ler o histórico: {exc}")
@@ -1382,7 +1513,7 @@ def main() -> None:
                     st.info("Nenhuma rodada arquivada dentro do range configurado.")
                 else:
                     if rodada_parcial in rodadas:
-                        st.warning(f"⚠️ Inclui a rodada {rodada_parcial} em andamento — classificação **parcial** (pode mudar até o fim da rodada).")
+                        st.warning(f"Inclui a rodada {rodada_parcial} em andamento — classificação **parcial** (pode mudar até o fim da rodada).", icon=":material/warning:")
                     st.caption(f"Baseado em {len(rodadas)} rodada(s): {', '.join(str(r) for r in rodadas)}")
                     df_class = pd.DataFrame(linhas_class)
                     df_class.insert(0, "Pos", range(1, len(df_class) + 1))
