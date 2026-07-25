@@ -5,6 +5,7 @@ App [Streamlit](https://streamlit.io/) para acompanhar as **parciais ao vivo** d
 - Pontuação de cada jogador pelos **pesos da sua liga** (`scouts_pontuacao.json`): `Σ(scout × peso)`.
 - Cards de confronto com tema escuro: barra de placar, coroa do vencedor, status ao vivo (🟢 jogou / 🔴 em andamento / cinza não iniciado) e ⭐ no maior pontuador.
 - Auto-refresh a cada 10 minutos.
+- Três abas: **Ao vivo** (placar), **Histórico** (cada rodada arquivada, lida da planilha) e **Classificação** (tabela agregada dos confrontos: V, E, D, pontos feitos e sofridos — ordena por vitórias → empates → pontos feitos → menos pontos sofridos).
 - Senha de edição e persistência em Google Sheets **opcionais** (via secrets).
 
 Fonte de dados: API pública do Cartola (`https://api.cartola.globo.com`).

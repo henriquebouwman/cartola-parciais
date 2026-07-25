@@ -16,6 +16,7 @@ Rodar com:  streamlit run parciais.py
 import json
 import os
 import pathlib
+import re
 import time
 from html import escape
 from typing import Dict, List, Optional, Tuple
@@ -406,6 +407,90 @@ def arquivar_rodada_no_sheets(rodada, linhas):
         ws = sh.add_worksheet(title=aba, rows=len(linhas) + 10, cols=6)
     ws.update(values=linhas, range_name="A1")
     return aba
+
+
+def _rodadas_disponiveis(sh) -> List[int]:
+    """Números das rodadas com aba `rodada{N}` na planilha, ordenados."""
+    nums = []
+    for w in sh.worksheets():
+        m = re.fullmatch(r"rodada(\d+)", (w.title or "").strip())
+        if m:
+            nums.append(int(m.group(1)))
+    return sorted(nums)
+
+
+def _ler_rodada(sh, rodada) -> List[List[str]]:
+    return sh.worksheet(f"rodada{rodada}").get_all_values()
+
+
+def _totais_confrontos(valores) -> List[Tuple[str, float, str, float]]:
+    """Extrai (time_a, pts_a, time_b, pts_b) das linhas TOTAL, em pares (A, B)."""
+    totais: List[Tuple[str, float]] = []
+    for row in valores:
+        if len(row) >= 5 and str(row[1]).strip().upper() == "TOTAL":
+            try:
+                pts = float(str(row[4]).replace(",", "."))
+            except (TypeError, ValueError):
+                pts = 0.0
+            totais.append((str(row[0]).strip(), pts))
+    confrontos = []
+    for i in range(0, len(totais) - 1, 2):
+        (a, pa), (b, pb) = totais[i], totais[i + 1]
+        confrontos.append((a, pa, b, pb))
+    return confrontos
+
+
+def calcular_classificacao(sh):
+    """Agrega os confrontos de todas as rodadas arquivadas. Retorna (linhas, rodadas)."""
+    from collections import defaultdict
+
+    stats = defaultdict(lambda: {"J": 0, "V": 0, "E": 0, "D": 0, "PF": 0.0, "PS": 0.0})
+    rodadas = _rodadas_disponiveis(sh)
+    for r in rodadas:
+        try:
+            confrontos = _totais_confrontos(_ler_rodada(sh, r))
+        except Exception:  # noqa: BLE001
+            continue
+        for a, pa, b, pb in confrontos:
+            for me, mine, theirs in ((a, pa, pb), (b, pb, pa)):
+                if not me:
+                    continue
+                s = stats[me]
+                s["J"] += 1
+                s["PF"] += mine
+                s["PS"] += theirs
+                if mine > theirs:
+                    s["V"] += 1
+                elif mine == theirs:
+                    s["E"] += 1
+                else:
+                    s["D"] += 1
+    linhas = [
+        {"Participante": nome, "J": s["J"], "V": s["V"], "E": s["E"], "D": s["D"],
+         "Pontos feitos": round(s["PF"], 2), "Pontos sofridos": round(s["PS"], 2)}
+        for nome, s in stats.items()
+    ]
+    # Critérios: vitórias > empates > pontos feitos > menos pontos sofridos.
+    linhas.sort(key=lambda x: (x["V"], x["E"], x["Pontos feitos"], -x["Pontos sofridos"]), reverse=True)
+    return linhas, rodadas
+
+
+def _mostrar_tabela_rodada(valores) -> None:
+    """Renderiza a aba rodada{N} (matriz de valores) como tabela."""
+    if not valores:
+        st.info("Aba vazia.")
+        return
+    titulo = valores[0][0] if valores[0] else ""
+    if titulo:
+        st.caption(titulo)
+    header = valores[1] if len(valores) > 1 else []
+    dados = [r for r in valores[2:] if any(str(c).strip() for c in r)]
+    if header and dados:
+        ncol = len(header)
+        dados = [(list(r) + [""] * ncol)[:ncol] for r in dados]
+        st.dataframe(pd.DataFrame(dados, columns=header), width="stretch", hide_index=True)
+    else:
+        st.info("Sem dados nesta rodada.")
 
 
 def carregar_estado() -> Tuple[Dict, bool]:
@@ -888,165 +973,198 @@ def main() -> None:
     if abrir_limpar:
         _dialogo_limpar()
 
-    parciais = carregar_parciais()
-    if not parciais:
-        if arquivar_agora:
-            st.toast("Mercado aberto / sem parciais — nada para arquivar.", icon="⚠️")
-        st.info("Sem parciais no momento (mercado aberto). O placar aparece quando a rodada começa.")
-        st.stop()
-    mercado = carregar_mercado()
-    if not mercado:
-        st.stop()
-    partidas = carregar_partidas()  # usado para escudos das selecoes (opcional)
-    pesos = carregar_pesos_scouts()
+    aba_vivo, aba_hist, aba_class = st.tabs(["🟢 Ao vivo", "📜 Histórico", "🏆 Classificação"])
 
-    atletas = mercado.get("atletas", [])
-    atletas_por_id = {
-        a.get("atleta_id"): a for a in atletas if a.get("atleta_id") is not None
-    }
-    clubes_por_id = coletar_clubes(mercado, partidas, parciais)
-    status_jogos = mapa_status_jogos(partidas)
-    opcoes, id_para_label = opcoes_por_posicao(atletas, clubes_por_id)
-
-    dados_confrontos: Dict[int, Dict] = {}
-    confrontos_para_salvar: Dict[str, Dict] = {}
-
-    leitura_ok = bool(st.session_state.get("leitura_ok", True))
-
-    if autorizado and not leitura_ok:
-        st.warning(
-            "Falha ao ler o estado salvo: as edições NÃO serão salvas nesta sessão "
-            "para proteger os dados. Clique em 'Atualizar parciais' para tentar de novo."
-        )
-
-    if autorizado:
-        titulo_secao("Montar / editar times")
-    else:
-        st.markdown(
-            "<div class='edit-locked'>"
-            "<div class='ico'>🔒</div>"
-            "<div><div class='txt'>Edição bloqueada</div>"
-            "<div class='sub'>Clique em “Habilitar edição” na barra lateral e digite a senha para alterar os confrontos.</div>"
-            "</div></div>",
-            unsafe_allow_html=True,
-        )
-
-    for n in range(1, num + 1):
-        salvo_conf = (
-            confrontos_salvos.get(str(n), {}) if isinstance(confrontos_salvos, dict) else {}
-        )
-        salvo_a, salvo_b = salvo_conf.get("a", {}), salvo_conf.get("b", {})
-        nome_a_pad = salvo_a.get("nome") or f"Time {2 * n - 1}"
-        nome_b_pad = salvo_b.get("nome") or f"Time {2 * n}"
-
-        if autorizado:
-            with st.expander(f"Confronto {n}", expanded=False):
-                ce_a, ce_b = st.columns(2)
-                with ce_a:
-                    nome_a, _, sel_a, ids_a = render_editor_time(
-                        f"c{n}_a", nome_a_pad, "4-3-3", salvo_a, opcoes, id_para_label
-                    )
-                with ce_b:
-                    nome_b, _, sel_b, ids_b = render_editor_time(
-                        f"c{n}_b", nome_b_pad, "4-3-3", salvo_b, opcoes, id_para_label
-                    )
-            confrontos_para_salvar[str(n)] = {
-                "a": {"nome": nome_a, "formacao": st.session_state.get(f"formacao_c{n}_a"), "selecao": sel_a},
-                "b": {"nome": nome_b, "formacao": st.session_state.get(f"formacao_c{n}_b"), "selecao": sel_b},
-            }
+    # ============================ AO VIVO ============================
+    with aba_vivo:
+        parciais = carregar_parciais()
+        mercado = carregar_mercado()
+        if not parciais or not mercado:
+            if arquivar_agora:
+                st.toast("Mercado aberto / sem parciais — nada para arquivar.", icon="⚠️")
+            st.info("Sem parciais no momento (mercado aberto). O placar aparece quando a rodada começa. Veja o histórico e a classificação nas outras abas.")
         else:
-            nome_a, nome_b = nome_a_pad, nome_b_pad
-            ids_a = ids_da_selecao(salvo_a.get("selecao"))
-            ids_b = ids_da_selecao(salvo_b.get("selecao"))
+            partidas = carregar_partidas()  # usado para escudos das selecoes (opcional)
+            pesos = carregar_pesos_scouts()
 
-        df_a = montar_tabela_escalacao(ids_a, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
-        df_b = montar_tabela_escalacao(ids_b, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
-        dados_confrontos[n] = {
-            "nome_a": nome_a, "df_a": df_a, "tot_a": total_time(df_a),
-            "nome_b": nome_b, "df_b": df_b, "tot_b": total_time(df_b),
-        }
+            atletas = mercado.get("atletas", [])
+            atletas_por_id = {
+                a.get("atleta_id"): a for a in atletas if a.get("atleta_id") is not None
+            }
+            clubes_por_id = coletar_clubes(mercado, partidas, parciais)
+            status_jogos = mapa_status_jogos(partidas)
+            opcoes, id_para_label = opcoes_por_posicao(atletas, clubes_por_id)
 
-    titulo_secao("Placar ao vivo")
-    ordem = list(range(1, num + 1))
-    for i in range(0, len(ordem), 2):
-        cols = st.columns(2)
-        for col, n in zip(cols, ordem[i:i + 2]):
-            d = dados_confrontos[n]
-            with col:
+            dados_confrontos: Dict[int, Dict] = {}
+            confrontos_para_salvar: Dict[str, Dict] = {}
+
+            leitura_ok = bool(st.session_state.get("leitura_ok", True))
+
+            if autorizado and not leitura_ok:
+                st.warning(
+                    "Falha ao ler o estado salvo: as edições NÃO serão salvas nesta sessão "
+                    "para proteger os dados. Clique em 'Atualizar parciais' para tentar de novo."
+                )
+
+            if autorizado:
+                titulo_secao("Montar / editar times")
+            else:
                 st.markdown(
-                    html_confronto(
-                        n, d["nome_a"], d["df_a"], d["tot_a"],
-                        d["nome_b"], d["df_b"], d["tot_b"],
-                    ),
+                    "<div class='edit-locked'>"
+                    "<div class='ico'>🔒</div>"
+                    "<div><div class='txt'>Edição bloqueada</div>"
+                    "<div class='sub'>Clique em “Habilitar edição” na barra lateral e digite a senha para alterar os confrontos.</div>"
+                    "</div></div>",
                     unsafe_allow_html=True,
                 )
 
-    # Arquivamento manual da rodada (botão da sidebar, só com edição liberada)
-    if arquivar_agora:
-        rodada_num = (parciais or {}).get("rodada")
-        atletas_pont = (parciais or {}).get("atletas", {}) or {}
-        if not rodada_num or not atletas_pont:
-            st.toast("Sem parciais disponíveis (mercado aberto?). Nada para arquivar.", icon="⚠️")
-        elif not confrontos_para_salvar:
-            st.toast("Nenhuma escalação para arquivar.", icon="⚠️")
+            for n in range(1, num + 1):
+                salvo_conf = (
+                    confrontos_salvos.get(str(n), {}) if isinstance(confrontos_salvos, dict) else {}
+                )
+                salvo_a, salvo_b = salvo_conf.get("a", {}), salvo_conf.get("b", {})
+                nome_a_pad = salvo_a.get("nome") or f"Time {2 * n - 1}"
+                nome_b_pad = salvo_b.get("nome") or f"Time {2 * n}"
+
+                if autorizado:
+                    with st.expander(f"Confronto {n}", expanded=False):
+                        ce_a, ce_b = st.columns(2)
+                        with ce_a:
+                            nome_a, _, sel_a, ids_a = render_editor_time(
+                                f"c{n}_a", nome_a_pad, "4-3-3", salvo_a, opcoes, id_para_label
+                            )
+                        with ce_b:
+                            nome_b, _, sel_b, ids_b = render_editor_time(
+                                f"c{n}_b", nome_b_pad, "4-3-3", salvo_b, opcoes, id_para_label
+                            )
+                    confrontos_para_salvar[str(n)] = {
+                        "a": {"nome": nome_a, "formacao": st.session_state.get(f"formacao_c{n}_a"), "selecao": sel_a},
+                        "b": {"nome": nome_b, "formacao": st.session_state.get(f"formacao_c{n}_b"), "selecao": sel_b},
+                    }
+                else:
+                    nome_a, nome_b = nome_a_pad, nome_b_pad
+                    ids_a = ids_da_selecao(salvo_a.get("selecao"))
+                    ids_b = ids_da_selecao(salvo_b.get("selecao"))
+
+                df_a = montar_tabela_escalacao(ids_a, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
+                df_b = montar_tabela_escalacao(ids_b, parciais, atletas_por_id, clubes_por_id, pesos, status_jogos)
+                dados_confrontos[n] = {
+                    "nome_a": nome_a, "df_a": df_a, "tot_a": total_time(df_a),
+                    "nome_b": nome_b, "df_b": df_b, "tot_b": total_time(df_b),
+                }
+
+            titulo_secao("Placar ao vivo")
+            ordem = list(range(1, num + 1))
+            for i in range(0, len(ordem), 2):
+                cols = st.columns(2)
+                for col, n in zip(cols, ordem[i:i + 2]):
+                    d = dados_confrontos[n]
+                    with col:
+                        st.markdown(
+                            html_confronto(
+                                n, d["nome_a"], d["df_a"], d["tot_a"],
+                                d["nome_b"], d["df_b"], d["tot_b"],
+                            ),
+                            unsafe_allow_html=True,
+                        )
+
+            # Arquivamento manual da rodada (botão da sidebar, só com edição liberada)
+            if arquivar_agora:
+                rodada_num = (parciais or {}).get("rodada")
+                atletas_pont = (parciais or {}).get("atletas", {}) or {}
+                if not rodada_num or not atletas_pont:
+                    st.toast("Sem parciais disponíveis (mercado aberto?). Nada para arquivar.", icon="⚠️")
+                elif not confrontos_para_salvar:
+                    st.toast("Nenhuma escalação para arquivar.", icon="⚠️")
+                else:
+                    try:
+                        with st.spinner("Arquivando rodada na planilha..."):
+                            linhas = montar_linhas_rodada(
+                                rodada_num, confrontos_para_salvar, parciais,
+                                atletas_por_id, clubes_por_id, pesos,
+                            )
+                            aba = arquivar_rodada_no_sheets(rodada_num, linhas)
+                        st.toast(f"Rodada arquivada na aba '{aba}'.", icon="✅")
+                        st.success(f"Rodada arquivada na aba '{aba}' da planilha.")
+                    except Exception as exc:  # noqa: BLE001
+                        st.toast("Erro ao arquivar a rodada.", icon="❌")
+                        st.error(f"Erro ao arquivar a rodada: {exc}")
+
+            if autorizado and leitura_ok:
+                # Baseline = estado renderizado desta sessao na 1a vez que ela editou.
+                if "_base_conf" not in st.session_state:
+                    st.session_state._base_conf = json.loads(json.dumps(confrontos_para_salvar))
+                    st.session_state._base_num = num
+                base_conf = st.session_state.get("_base_conf", {}) or {}
+                base_num = int(st.session_state.get("_base_num", num) or num)
+
+                def _tot(conf: Dict) -> int:
+                    return sum(
+                        1
+                        for lado in ("a", "b")
+                        for v in ((conf.get(lado, {}) or {}).get("selecao") or {}).values()
+                        if v
+                    )
+
+                mudou: Dict[str, Dict] = {}
+                for n_str, conf in confrontos_para_salvar.items():
+                    if conf != base_conf.get(n_str):
+                        if _tot(conf) == 0 and _tot(base_conf.get(n_str, {}) or {}) > 0:
+                            continue
+                        mudou[n_str] = conf
+                num_mudou = num != base_num
+
+                if mudou or num_mudou:
+                    remoto, ok = carregar_estado()
+                    if ok:
+                        remoto = remoto or {}
+                        rconf = dict(remoto.get("confrontos", {}) or {})
+                        for n_str, conf in mudou.items():
+                            rconf[n_str] = conf
+                            base_conf[n_str] = conf
+                        novo_num = num if num_mudou else int(remoto.get("num_confrontos", num) or num)
+                        novo = {"num_confrontos": novo_num, "confrontos": rconf}
+                        salvar_escalacao_salva(novo)
+                        st.session_state.dados_salvos = novo
+                        st.session_state._base_conf = base_conf
+                        st.session_state._base_num = num if num_mudou else base_num
+
+    # ============================ HISTÓRICO ============================
+    with aba_hist:
+        titulo_secao("Histórico por rodada")
+        if not _gsheets_configurado():
+            st.info("Configure o Google Sheets para ver o histórico arquivado.")
         else:
             try:
-                with st.spinner("Arquivando rodada na planilha..."):
-                    linhas = montar_linhas_rodada(
-                        rodada_num, confrontos_para_salvar, parciais,
-                        atletas_por_id, clubes_por_id, pesos,
-                    )
-                    aba = arquivar_rodada_no_sheets(rodada_num, linhas)
-                st.toast(f"Rodada arquivada na aba '{aba}'.", icon="✅")
-                st.success(f"Rodada arquivada na aba '{aba}' da planilha.")
+                sh = _planilha()
+                rodadas = _rodadas_disponiveis(sh)
+                if not rodadas:
+                    st.info("Nenhuma rodada arquivada ainda.")
+                else:
+                    sel = st.selectbox("Rodada", rodadas, index=len(rodadas) - 1,
+                                       format_func=lambda r: f"Rodada {r}")
+                    _mostrar_tabela_rodada(_ler_rodada(sh, sel))
             except Exception as exc:  # noqa: BLE001
-                st.toast("Erro ao arquivar a rodada.", icon="❌")
-                st.error(f"Erro ao arquivar a rodada: {exc}")
+                st.error(f"Erro ao ler o histórico: {exc}")
 
-    if autorizado and leitura_ok:
-        # Baseline = estado renderizado desta sessao na 1a vez que ela editou.
-        # Capturado aqui (e nao no load) para comparar "renderizado vs renderizado".
-        if "_base_conf" not in st.session_state:
-            st.session_state._base_conf = json.loads(json.dumps(confrontos_para_salvar))
-            st.session_state._base_num = num
-        base_conf = st.session_state.get("_base_conf", {}) or {}
-        base_num = int(st.session_state.get("_base_num", num) or num)
-
-        def _tot(conf: Dict) -> int:
-            return sum(
-                1
-                for lado in ("a", "b")
-                for v in ((conf.get(lado, {}) or {}).get("selecao") or {}).values()
-                if v
-            )
-
-        # Detecta apenas os confrontos que ESTA sessao alterou (vs baseline).
-        # Assim, ao salvar, nao sobrescrevemos confrontos editados por outros.
-        mudou: Dict[str, Dict] = {}
-        for n_str, conf in confrontos_para_salvar.items():
-            if conf != base_conf.get(n_str):
-                # Anti-zeramento por confronto: nao auto-esvaziar um confronto
-                # que tinha jogadores (para apagar, use 'Limpar tudo').
-                if _tot(conf) == 0 and _tot(base_conf.get(n_str, {}) or {}) > 0:
-                    continue
-                mudou[n_str] = conf
-        num_mudou = num != base_num
-
-        if mudou or num_mudou:
-            # Re-le o estado mais recente e faz merge (preserva o que outros salvaram)
-            remoto, ok = carregar_estado()
-            if ok:
-                remoto = remoto or {}
-                rconf = dict(remoto.get("confrontos", {}) or {})
-                for n_str, conf in mudou.items():
-                    rconf[n_str] = conf
-                    base_conf[n_str] = conf
-                novo_num = num if num_mudou else int(remoto.get("num_confrontos", num) or num)
-                novo = {"num_confrontos": novo_num, "confrontos": rconf}
-                salvar_escalacao_salva(novo)
-                st.session_state.dados_salvos = novo
-                st.session_state._base_conf = base_conf
-                st.session_state._base_num = num if num_mudou else base_num
+    # ============================ CLASSIFICAÇÃO ============================
+    with aba_class:
+        titulo_secao("Classificação")
+        st.caption("Critérios: vitórias → empates → pontos feitos → menos pontos sofridos (derrotas não desempatam).")
+        if not _gsheets_configurado():
+            st.info("Configure o Google Sheets para ver a classificação.")
+        else:
+            try:
+                linhas_class, rodadas = calcular_classificacao(_planilha())
+                if not linhas_class:
+                    st.info("Nenhuma rodada arquivada ainda.")
+                else:
+                    st.caption(f"Baseado em {len(rodadas)} rodada(s): {', '.join(str(r) for r in rodadas)}")
+                    df_class = pd.DataFrame(linhas_class)
+                    df_class.insert(0, "Pos", range(1, len(df_class) + 1))
+                    st.dataframe(df_class, width="stretch", hide_index=True)
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Erro ao calcular a classificação: {exc}")
 
 
 if __name__ == "__main__":
