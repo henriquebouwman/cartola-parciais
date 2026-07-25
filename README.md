@@ -13,8 +13,6 @@ App [Streamlit](https://streamlit.io/) de uma **liga de fantasy (draft)** do Car
 - **Acesso por senha (na barra lateral):** sem senha o app é **somente-leitura**; a **senha do participante** libera editar **apenas o time dele**; a **senha master** libera **editar todos os times** + as ações de admin. Cada participante escala pela sua senha e o placar/arquivamento seguem a tabela de confrontos.
 - Persistência em Google Sheets (via secrets do Streamlit).
 
-Na sidebar (logado como **master**) há uma seção **🧪 Teste / Admin** (temporária) para: recriar as abas de config no formato padrão, gerar **rodadas fake** (marcadas `[TESTE]`) e apagar só essas rodadas de teste.
-
 Fonte de dados: API pública do Cartola (`https://api.cartola.globo.com`).
 
 ## Rodar localmente

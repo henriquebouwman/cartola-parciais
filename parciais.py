@@ -814,80 +814,6 @@ def carregar_config() -> Dict:
     return cfg
 
 
-# --------------------------------------------------------- utilitários (admin/teste)
-def resetar_config_tabs(sh) -> None:
-    """Apaga e recria as abas participantes/confrontos/config no formato padrão."""
-    for w in list(sh.worksheets()):
-        if w.title in ("participantes", "confrontos", "config"):
-            sh.del_worksheet(w)
-    _garantir_config(sh)
-
-
-NOMES_FAKE = [
-    "Léo", "Gabriel", "Pedro", "Hulk", "Arrascaeta", "Cano", "Rony", "Everton",
-    "Thiago", "Bruno", "Nino", "Marcos", "Rafael", "Danilo", "Gérson", "Veiga",
-    "Dudu", "Endrick", "Vítor", "Yuri", "Igor", "Caio", "Léo Ortiz", "Wesley",
-    "Guga", "Fábio", "Renato", "Cássio", "Weverton", "Rossi", "John", "Bento",
-    "Kaio", "Lucas", "Matheus", "Paulinho", "Vegetti", "Alerrandro", "Estêvão", "Savinho",
-]
-CLUBES_FAKE = [
-    "FLA", "PAL", "COR", "SAO", "FLU", "GRE", "INT", "ATL", "BOT", "VAS",
-    "CRU", "BAH", "FOR", "JUV", "CAP", "RBB", "CUI", "VIT", "CFC", "BGT",
-]
-# Distribuição de posições de uma escalação 4-3-3.
-POSICOES_FAKE = ["GOL", "LAT", "LAT", "ZAG", "ZAG", "MEI", "MEI", "MEI", "ATA", "ATA", "ATA"]
-
-
-def gerar_rodadas_fake(sh, cfg, rodadas) -> List[int]:
-    """Cria abas rodada{N} FICTÍCIAS (marcadas [TESTE]) com jogadores aleatórios."""
-    import random
-
-    nome2ap = {n: a for n, a in zip(cfg["participantes"], cfg["apelidos"])}
-    feitas = []
-    for r in rodadas:
-        pares = cfg["confrontos"].get(r)
-        if not pares:
-            continue
-        linhas = [[f"Rodada {r} — [TESTE] dados fictícios"],
-                  ["Participante", "Jogador", "Posição", "Clube", "Parcial"]]
-        for a, b in pares:
-            for nome in (a, b):
-                apelido = nome2ap.get(nome, nome)
-                total = 0.0
-                nomes = random.sample(NOMES_FAKE, len(POSICOES_FAKE))
-                for pos, jogador in zip(POSICOES_FAKE, nomes):
-                    pts = round(random.uniform(-2, 14), 2)
-                    total += pts
-                    linhas.append([apelido, jogador, pos, random.choice(CLUBES_FAKE), pts])
-                linhas.append([apelido, "TOTAL", "", "", round(total, 2)])
-            linhas.append([])
-        aba = f"rodada{r}"
-        if aba in [w.title for w in sh.worksheets()]:
-            ws = sh.worksheet(aba)
-            ws.clear()
-        else:
-            ws = sh.add_worksheet(title=aba, rows=len(linhas) + 5, cols=6)
-        ws.update(values=linhas, range_name="A1")
-        feitas.append(r)
-    return feitas
-
-
-def apagar_rodadas_teste(sh) -> List[str]:
-    """Apaga apenas as abas rodada{N} marcadas com [TESTE] no topo."""
-    apagadas = []
-    for w in list(sh.worksheets()):
-        if not re.fullmatch(r"rodada\d+", (w.title or "").strip()):
-            continue
-        try:
-            a1 = (w.acell("A1").value or "").upper()
-        except Exception:  # noqa: BLE001
-            a1 = ""
-        if "TESTE" in a1:
-            sh.del_worksheet(w)
-            apagadas.append(w.title)
-    return apagadas
-
-
 def carregar_estado() -> Tuple[Dict, bool]:
     """Le o estado salvo. Retorna (dados, leitura_ok).
 
@@ -1370,7 +1296,6 @@ def main() -> None:
 
     abrir_limpar = False
     arquivar_agora = False
-    resetar_cfg = gerar_fake = apagar_fake = False
     with st.sidebar:
         st.header("Acesso")
         if papel is None:
@@ -1405,38 +1330,9 @@ def main() -> None:
             if _gsheets_configurado():
                 if st.button("Arquivar rodada agora", use_container_width=True, key="btn_arquivar"):
                     arquivar_agora = True
-                with st.expander("Teste / Admin", icon=":material/science:"):
-                    if st.button("Recriar abas de config", use_container_width=True, key="btn_reset_cfg"):
-                        resetar_cfg = True
-                    if st.button("Gerar rodadas fake", use_container_width=True, key="btn_fake"):
-                        gerar_fake = True
-                    if st.button("Apagar rodadas de teste", use_container_width=True, key="btn_del_fake"):
-                        apagar_fake = True
 
     if abrir_limpar:
         _dialogo_limpar()
-
-    # Ações de teste/admin (mexem na planilha; rodam mesmo com o mercado aberto).
-    if resetar_cfg or gerar_fake or apagar_fake:
-        try:
-            sh_admin = _planilha()
-            if resetar_cfg:
-                resetar_config_tabs(sh_admin)
-                msg = "Abas participantes/confrontos/config recriadas no formato padrão."
-            elif gerar_fake:
-                _c = carregar_config()
-                rr = list(range(_c["rodada_ini"], min(_c["rodada_ini"] + 4, _c["rodada_fim"] + 1)))
-                feitas = gerar_rodadas_fake(sh_admin, _c, rr)
-                msg = f"Rodadas fake geradas: {feitas}."
-            else:
-                apagadas = apagar_rodadas_teste(sh_admin)
-                msg = f"Rodadas de teste apagadas: {apagadas or 'nenhuma'}."
-            st.cache_data.clear()
-            st.toast(msg, icon=":material/check_circle:")
-            st.success(msg)
-        except Exception as exc:  # noqa: BLE001
-            st.toast("Erro na ação de teste.", icon=":material/error:")
-            st.error(f"Erro na ação de teste: {exc}")
 
     # Rodada em andamento (mercado fechado): dados dela são PARCIAIS até o mercado reabrir.
     _ms = carregar_mercado_status() or {}
