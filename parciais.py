@@ -1533,7 +1533,7 @@ def main() -> None:
     # ============================ CLASSIFICAÇÃO ============================
     with aba_class:
         titulo_secao("Classificação")
-        st.caption(f"Rodadas {ini}–{fim} · critérios: vitórias → empates → pontos feitos → menos pontos sofridos.")
+        st.caption("Critérios: vitórias → empates → pontos feitos → menos pontos sofridos.")
         if not _gsheets_configurado():
             st.info("Configure o Google Sheets para ver a classificação.")
         else:
