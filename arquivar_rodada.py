@@ -52,10 +52,25 @@ def parcial(scout, pesos):
     return sum(float(q) * pesos.get(k, 0.0) for k, q in scout.items())
 
 
+def scouts_para_texto(scout):
+    """Serializa o scout para a célula da planilha: "G:1;DS:3" (lido pelo app)."""
+    if not isinstance(scout, dict):
+        return ""
+    partes = []
+    for chave, qtd in scout.items():
+        try:
+            q = int(float(qtd))
+        except (TypeError, ValueError):
+            continue
+        if q:
+            partes.append(f"{chave}:{q}")
+    return ";".join(partes)
+
+
 def montar_linhas(rodada, confrontos, atletas_pont, atl_meta, clubes, pesos):
     quando = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     linhas = [[f"Rodada {rodada} — atualizado em {quando} (mercado fechado)"],
-              ["Participante", "Jogador", "Posição", "Clube", "Parcial"]]
+              ["Participante", "Jogador", "Posição", "Clube", "Parcial", "Scouts"]]
     for n in sorted(confrontos, key=lambda x: int(x)):
         conf = confrontos[n] or {}
         for lado in ("a", "b"):
@@ -82,9 +97,10 @@ def montar_linhas(rodada, confrontos, atletas_pont, atl_meta, clubes, pesos):
                 clube = clubes.get(clube_id, {}) if clube_id else {}
                 linhas.append([participante, apelido,
                                POSICOES.get(posicao_id, ""),
-                               clube.get("abreviacao", ""), pts])
+                               clube.get("abreviacao", ""), pts,
+                               scouts_para_texto(scout)])
             if tem_jogador:
-                linhas.append([participante, "TOTAL", "", "", round(total, 2)])
+                linhas.append([participante, "TOTAL", "", "", round(total, 2), ""])
         linhas.append([])  # separador entre confrontos
     return linhas
 

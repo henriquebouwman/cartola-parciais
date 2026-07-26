@@ -84,6 +84,16 @@ FORMACOES = {
 
 ORDEM_POSICAO = {"GOL": 1, "LAT": 2, "ZAG": 3, "MEI": 4, "ATA": 5}
 
+# Nomes por extenso dos scouts do Cartola (usados no tooltip de cada jogador).
+SCOUTS_LABELS = {
+    "G": "Gol", "A": "Assistência", "SG": "Jogo sem sofrer gol", "DS": "Desarme",
+    "DE": "Defesa", "DP": "Defesa de pênalti", "FD": "Finalização defendida",
+    "FT": "Finalização na trave", "FF": "Finalização para fora", "FS": "Falta sofrida",
+    "PS": "Pênalti sofrido", "I": "Impedimento", "FC": "Falta cometida",
+    "CA": "Cartão amarelo", "CV": "Cartão vermelho", "GC": "Gol contra",
+    "GS": "Gol sofrido", "PC": "Pênalti cometido", "PP": "Pênalti perdido",
+}
+
 CSS = """
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-25..0');
@@ -165,9 +175,34 @@ CSS = """
   .sdot.dn { background: #3a4150; }
   .sdot.blink { animation: pulse 1.4s ease-in-out infinite; }
   .star { color: #f5c518; margin-left: 4px; font-size: 13px; }
-  td.pt { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; width: 46px; }
+  td.pt { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; width: 46px;
+          position: relative; }
   td.pt.pos-val { color: #3fd07f; }
   td.pt.neg-val { color: #f0746b; }
+  /* Tooltip de scouts (hover na linha do jogador) */
+  table.lu tr:hover td { background: rgba(255,255,255,.05); cursor: default; }
+  .tip {
+      display: none; position: absolute; right: 0; top: calc(100% + 5px); z-index: 60;
+      min-width: 190px; padding: 9px 11px; text-align: left; font-weight: 400;
+      background: #0d1117; border: 1px solid #30363d; border-radius: 10px;
+      box-shadow: 0 12px 28px rgba(0,0,0,.6); pointer-events: none;
+  }
+  table.lu tr:hover .tip { display: block; }
+  .tip-h { color: #7d8896; font-size: 9px; font-weight: 700; letter-spacing: 1px;
+           text-transform: uppercase; margin-bottom: 6px; }
+  table.tipt { width: 100%; border-collapse: collapse; font-size: 11px; }
+  table.tipt td { padding: 1px 0; color: #c9d1d9; white-space: nowrap; border: 0; }
+  table.tipt td.v { text-align: right; padding-left: 14px; font-weight: 600;
+                    font-variant-numeric: tabular-nums; }
+  table.tipt td.v.p { color: #3fd07f; }
+  table.tipt td.v.n { color: #f0746b; }
+  .tip .sk { display: inline-block; min-width: 24px; color: #6e7681;
+             font-size: 9px; font-weight: 700; letter-spacing: .3px; }
+  .tip .qt { color: #8b949e; font-weight: 700; margin-left: 5px; }
+  .tip-f { display: flex; justify-content: space-between; gap: 14px; margin-top: 6px;
+           padding-top: 5px; border-top: 1px solid #20262e; font-size: 11px;
+           font-weight: 700; color: #9aa4b1; font-variant-numeric: tabular-nums; }
+  .tip-e { color: #6e7681; font-size: 11px; font-style: italic; white-space: nowrap; }
   .empty { color: #6e7681; font-size: 12px; font-style: italic; padding: 6px 2px; }
   /* Botao "Habilitar edicao" (key=btn_habilitar) */
   section[data-testid="stSidebar"] .st-key-btn_habilitar button {
@@ -328,6 +363,36 @@ def carregar_pesos_scouts() -> Dict[str, float]:
         return {}
 
 
+def scouts_para_texto(scout: Optional[Dict]) -> str:
+    """Serializa o scout para uma célula da planilha: `"G:1;DS:3"`."""
+    if not isinstance(scout, dict):
+        return ""
+    partes = []
+    for chave, qtd in scout.items():
+        try:
+            q = int(float(qtd))
+        except (TypeError, ValueError):
+            continue
+        if q:
+            partes.append(f"{chave}:{q}")
+    return ";".join(partes)
+
+
+def texto_para_scouts(texto) -> Dict[str, int]:
+    """Inverso de scouts_para_texto (célula vazia -> sem scouts)."""
+    scout: Dict[str, int] = {}
+    for parte in str(texto or "").split(";"):
+        chave, _, qtd = parte.partition(":")
+        chave = chave.strip().upper()
+        if not chave:
+            continue
+        try:
+            scout[chave] = int(float(qtd))
+        except (TypeError, ValueError):
+            continue
+    return scout
+
+
 def pontuacao_scouts(scout: Optional[Dict], pesos: Dict[str, float]) -> float:
     if not scout:
         return 0.0
@@ -456,13 +521,13 @@ def _worksheet_estado():
 
 
 def montar_linhas_rodada(rodada, confrontos, parciais, atletas_por_id, clubes_por_id, pesos):
-    """Linhas [Participante, Jogador, Posição, Clube, Parcial] + total por time."""
+    """Linhas [Participante, Jogador, Posição, Clube, Parcial, Scouts] + total por time."""
     from datetime import datetime, timezone
 
     parciais_atletas = (parciais or {}).get("atletas", {}) or {}
     quando = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     linhas = [[f"Rodada {rodada} — arquivado em {quando}"],
-              ["Participante", "Jogador", "Posição", "Clube", "Parcial"]]
+              ["Participante", "Jogador", "Posição", "Clube", "Parcial", "Scouts"]]
     for n in sorted(confrontos, key=lambda x: int(x)):
         conf = confrontos[n] or {}
         for lado in ("a", "b"):
@@ -483,9 +548,10 @@ def montar_linhas_rodada(rodada, confrontos, parciais, atletas_por_id, clubes_po
                 clube = clubes_por_id.get(meta.get("clube_id"), {}) if meta.get("clube_id") else {}
                 linhas.append([participante, meta.get("apelido", str(aid)),
                                POSICOES.get(meta.get("posicao_id"), ""),
-                               (clube or {}).get("abreviacao", ""), pts])
+                               (clube or {}).get("abreviacao", ""), pts,
+                               scouts_para_texto(scout)])
             if tem:
-                linhas.append([participante, "TOTAL", "", "", round(total, 2)])
+                linhas.append([participante, "TOTAL", "", "", round(total, 2), ""])
         linhas.append([])
     return linhas
 
@@ -594,15 +660,19 @@ def calcular_classificacao(_sh, rodada_ini=None, rodada_fim=None):
 def _parse_rodada(valores) -> List[List[Tuple[str, List[Dict], float]]]:
     """Transforma a matriz da aba rodada{N} em confrontos [(timeA), (timeB)].
 
-    Cada time = (nome, [ {Jogador, Posição, Clube, Pts} ... ], total).
+    Cada time = (nome, [ {Jogador, Posição, Clube, Pts, Scout} ... ], total).
     O layout salvo é: título, cabeçalho, linhas de jogador + linha TOTAL por
-    time, com linha em branco separando confrontos.
+    time, com linha em branco separando confrontos. `Scout=None` nas rodadas
+    arquivadas antes da coluna de scouts existir.
     """
     def _f(x) -> float:
         try:
             return float(str(x).replace(",", "."))
         except (TypeError, ValueError):
             return 0.0
+
+    cabecalho = [str(c).strip().lower() for c in (valores[1] if len(valores) > 1 else [])]
+    tem_scouts = len(cabecalho) > 5 and cabecalho[5].startswith("scout")
 
     times: List[Tuple[str, List[Dict], float]] = []
     nome_atual, jogadores = None, []
@@ -623,11 +693,49 @@ def _parse_rodada(valores) -> List[List[Tuple[str, List[Dict], float]]]:
                 "Posição": cells[2] if len(cells) > 2 else "",
                 "Clube": cells[3] if len(cells) > 3 else "",
                 "Pts": _f(cells[4]) if len(cells) > 4 and cells[4] else 0.0,
+                "Scout": (texto_para_scouts(cells[5] if len(cells) > 5 else "")
+                          if tem_scouts else None),
             })
     return [times[i:i + 2] for i in range(0, len(times) - 1, 2)]
 
 
-def _html_lineup_hist(jogadores, top_val, escudos=None) -> str:
+def html_tip_scouts(scout: Optional[Dict], pesos: Dict[str, float]) -> str:
+    """Tooltip (hover) com os scouts do jogador e quanto cada um pontuou.
+
+    `scout=None` = rodada arquivada antes da coluna de scouts existir.
+    """
+    if scout is None:
+        return "<div class='tip'><div class='tip-e'>Scouts não arquivados nesta rodada.</div></div>"
+
+    itens = []
+    for chave, qtd in (scout or {}).items():
+        try:
+            q = float(qtd)
+        except (TypeError, ValueError):
+            continue
+        if q:
+            itens.append((str(chave).upper(), int(q), q * (pesos or {}).get(chave, 0.0)))
+    if not itens:
+        return "<div class='tip'><div class='tip-e'>Sem scouts.</div></div>"
+
+    itens.sort(key=lambda x: (-abs(x[2]), x[0]))
+    linhas = []
+    for chave, qtd, pts in itens:
+        cls = "p" if pts > 0 else ("n" if pts < 0 else "")
+        linhas.append(
+            f"<tr><td><span class='sk'>{escape(chave)}</span>"
+            f"{escape(SCOUTS_LABELS.get(chave, chave))}<span class='qt'>×{qtd}</span></td>"
+            f"<td class='v {cls}'>{pts:+.2f}</td></tr>"
+        )
+    total = sum(p for _, _, p in itens)
+    return (
+        "<div class='tip'><div class='tip-h'>Scouts</div>"
+        f"<table class='tipt'>{''.join(linhas)}</table>"
+        f"<div class='tip-f'><span>Total</span><span>{total:+.2f}</span></div></div>"
+    )
+
+
+def _html_lineup_hist(jogadores, top_val, escudos=None, pesos=None) -> str:
     if not jogadores:
         return "<div class='empty'>Sem jogadores.</div>"
     escudos = escudos or {}
@@ -647,15 +755,16 @@ def _html_lineup_hist(jogadores, top_val, escudos=None) -> str:
             marca = f"<span class='clab'>{escape(clube)}</span>"
         else:
             marca = ""
+        tip = html_tip_scouts(j.get("Scout"), pesos or {})
         rows.append(
             f"<tr><td class='pos'><span>{pos}</span></td>"
             f"<td class='nm'>{marca}{nome}{star}</td>"
-            f"<td class='pt {cls}'>{val:.2f}</td></tr>"
+            f"<td class='pt {cls}'>{val:.2f}{tip}</td></tr>"
         )
     return "<table class='lu'>" + "".join(rows) + "</table>"
 
 
-def _html_time_hist(nome, jogadores, total, vencedor, top_val, escudos=None) -> str:
+def _html_time_hist(nome, jogadores, total, vencedor, top_val, escudos=None, pesos=None) -> str:
     win = "win" if vencedor else ""
     crown = "<span class='msym crown'>emoji_events</span>" if vencedor else ""
     sub = f"{len(jogadores)} jogadores" if jogadores else "sem escalação"
@@ -665,11 +774,11 @@ def _html_time_hist(nome, jogadores, total, vencedor, top_val, escudos=None) -> 
         f"<div class='tm-name'>{escape(str(nome))}{crown}</div>"
         f"<div class='tm-sub'>{sub}</div></div>"
         f"<span class='tm-score'>{total:.2f}</span></div>"
-        f"{_html_lineup_hist(jogadores, top_val, escudos)}</div>"
+        f"{_html_lineup_hist(jogadores, top_val, escudos, pesos)}</div>"
     )
 
 
-def _html_confronto_hist(k, time_a, time_b, escudos=None) -> str:
+def _html_confronto_hist(k, time_a, time_b, escudos=None, pesos=None) -> str:
     nome_a, jog_a, tot_a = time_a
     nome_b, jog_b, tot_b = time_b
     a_win, b_win = tot_a > tot_b, tot_b > tot_a
@@ -689,9 +798,9 @@ def _html_confronto_hist(k, time_a, time_b, escudos=None) -> str:
         f"<span class='{seg_a}' style='width:{wa:.1f}%'></span>"
         f"<span class='{seg_b}' style='width:{wb:.1f}%'></span></div>"
         f"<div class='cc-body'>"
-        f"{_html_time_hist(nome_a, jog_a, tot_a, a_win, top_val, escudos)}"
+        f"{_html_time_hist(nome_a, jog_a, tot_a, a_win, top_val, escudos, pesos)}"
         f"<div class='cc-div'></div>"
-        f"{_html_time_hist(nome_b, jog_b, tot_b, b_win, top_val, escudos)}"
+        f"{_html_time_hist(nome_b, jog_b, tot_b, b_win, top_val, escudos, pesos)}"
         f"</div></div>"
     )
 
@@ -724,7 +833,7 @@ def html_classificacao(linhas: List[Dict]) -> str:
     return f"<div class='clz-wrap'><table class='clz'>{head}<tbody>{''.join(corpo)}</tbody></table></div>"
 
 
-def _mostrar_tabela_rodada(valores, escudos=None) -> None:
+def _mostrar_tabela_rodada(valores, escudos=None, pesos=None) -> None:
     """Renderiza a aba rodada{N} como um card por confronto (3 por rodada)."""
     if not valores:
         st.info("Aba vazia.")
@@ -736,7 +845,8 @@ def _mostrar_tabela_rodada(valores, escudos=None) -> None:
     for k, conf in enumerate(confrontos, start=1):
         if len(conf) < 2:
             continue
-        st.markdown(_html_confronto_hist(k, conf[0], conf[1], escudos), unsafe_allow_html=True)
+        st.markdown(_html_confronto_hist(k, conf[0], conf[1], escudos, pesos),
+                    unsafe_allow_html=True)
 
 
 def _garantir_config(sh) -> None:
@@ -982,6 +1092,7 @@ def montar_tabela_escalacao(
                 "Jogou": bool(entrou_em_campo),
                 "JogoStatus": (status_jogos or {}).get(clube_id, "nao_iniciado"),
                 "Parcial": pontuacao,
+                "Scout": scout if isinstance(scout, dict) else {},
             }
         )
 
@@ -1008,7 +1119,7 @@ def jogadores_em_campo(df: pd.DataFrame) -> int:
 # ---------------------------------------------------------------------------
 # Render dos cards (tema escuro refinado)
 # ---------------------------------------------------------------------------
-def html_lineup(df: pd.DataFrame, top_val: Optional[float]) -> str:
+def html_lineup(df: pd.DataFrame, top_val: Optional[float], pesos=None) -> str:
     if df.empty:
         return "<div class='empty'>Sem jogadores selecionados.</div>"
     rows = []
@@ -1035,17 +1146,18 @@ def html_lineup(df: pd.DataFrame, top_val: Optional[float]) -> str:
             if (top_val is not None and val == top_val and val > 0)
             else ""
         )
+        tip = html_tip_scouts(r.get("Scout") or {}, pesos or {})
         rows.append(
             f"<tr class='{played}'>"
             f"<td class='pos'><span>{pos}</span></td>"
             f"<td class='nm'>{dot}{img}{nome}{star}</td>"
-            f"<td class='pt {cls}'>{val:.2f}</td>"
+            f"<td class='pt {cls}'>{val:.2f}{tip}</td>"
             f"</tr>"
         )
     return "<table class='lu'>" + "".join(rows) + "</table>"
 
 
-def html_time(nome, df, total, vencedor, top_val) -> str:
+def html_time(nome, df, total, vencedor, top_val, pesos=None) -> str:
     win = "win" if vencedor else ""
     crown = "<span class='msym crown'>emoji_events</span>" if vencedor else ""
     em_campo = jogadores_em_campo(df)
@@ -1059,7 +1171,7 @@ def html_time(nome, df, total, vencedor, top_val) -> str:
         f"<div class='tm-sub'>{sub}</div>"
         f"</div>"
         f"<span class='tm-score'>{total:.2f}</span>"
-        f"</div>{html_lineup(df, top_val)}</div>"
+        f"</div>{html_lineup(df, top_val, pesos)}</div>"
     )
 
 
@@ -1073,7 +1185,7 @@ def barra_placar(tot_a: float, tot_b: float) -> Tuple[float, float]:
     return wa, 100.0 - wa
 
 
-def html_confronto(n, nome_a, df_a, tot_a, nome_b, df_b, tot_b) -> str:
+def html_confronto(n, nome_a, df_a, tot_a, nome_b, df_b, tot_b, pesos=None) -> str:
     a_win = tot_a > tot_b
     b_win = tot_b > tot_a
     top_val = None
@@ -1102,9 +1214,9 @@ def html_confronto(n, nome_a, df_a, tot_a, nome_b, df_b, tot_b) -> str:
         f"<span class='{seg_b}' style='width:{wb:.1f}%'></span>"
         f"</div>"
         f"<div class='cc-body'>"
-        f"{html_time(nome_a, df_a, tot_a, a_win, top_val)}"
+        f"{html_time(nome_a, df_a, tot_a, a_win, top_val, pesos)}"
         f"<div class='cc-div'></div>"
-        f"{html_time(nome_b, df_b, tot_b, b_win, top_val)}"
+        f"{html_time(nome_b, df_b, tot_b, b_win, top_val, pesos)}"
         f"</div></div>"
     )
 
@@ -1486,7 +1598,7 @@ def main() -> None:
                         st.markdown(
                             html_confronto(
                                 n, c["a"]["nome"], df_a, total_time(df_a),
-                                c["b"]["nome"], df_b, total_time(df_b),
+                                c["b"]["nome"], df_b, total_time(df_b), pesos,
                             ),
                             unsafe_allow_html=True,
                         )
@@ -1550,7 +1662,8 @@ def main() -> None:
                             unsafe_allow_html=True,
                         )
                     escudos_abrev = mapa_escudos_por_abrev(coletar_clubes(carregar_mercado() or {}))
-                    _mostrar_tabela_rodada(_ler_rodada(sh, sel), escudos_abrev)
+                    _mostrar_tabela_rodada(_ler_rodada(sh, sel), escudos_abrev,
+                                           carregar_pesos_scouts())
             except Exception as exc:  # noqa: BLE001
                 st.error(f"Erro ao ler o histórico: {exc}")
 
