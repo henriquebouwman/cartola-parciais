@@ -121,13 +121,17 @@ CSS = """
       box-shadow: 0 6px 18px rgba(0,0,0,0.35);
   }
   .cc-h {
-      display: flex; align-items: center; justify-content: space-between;
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
       color: #7d8896; font-size: 11px; font-weight: 700; letter-spacing: 1.5px;
       text-transform: uppercase; margin-bottom: 10px;
   }
-  .cc-h .ttl { display: flex; align-items: center; gap: 7px; }
+  .cc-h .ttl { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
   .cc-h .ttl::before { font-family: 'Material Symbols Rounded'; content: "stadium"; font-size: 15px; }
   .cc-live { display: inline-flex; align-items: center; gap: 5px; color: #00ff87; font-size: 9px; }
+  /* Diferenca de pontos do confronto (chip no cabecalho do card) */
+  .cc-delta { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  .cc-delta .ld { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
+  .cc-delta .dv { color: #3fd07f; font-variant-numeric: tabular-nums; flex-shrink: 0; }
   /* Barra de comparacao de placar */
   .cc-bar {
       display: flex; height: 7px; border-radius: 5px; overflow: hidden;
@@ -1185,6 +1189,26 @@ def barra_placar(tot_a: float, tot_b: float) -> Tuple[float, float]:
     return wa, 100.0 - wa
 
 
+def html_delta_confronto(nome_a: str, tot_a: float, nome_b: str, tot_b: float) -> str:
+    """Chip do cabecalho: quem lidera o confronto e por quantos pontos.
+
+    Vazio enquanto os dois times estao zerados (rodada nao comecou): nao ha o
+    que comparar. A tolerancia evita um "+0.00" por residuo de float.
+    """
+    delta = tot_a - tot_b
+    if abs(delta) < 0.005:
+        if abs(tot_a) < 0.005 and abs(tot_b) < 0.005:
+            return ""
+        return "<span class='cc-delta'>Empate</span>"
+    lider = nome_a if delta > 0 else nome_b
+    return (
+        f"<span class='cc-delta'>"
+        f"<span class='ld'>{escape(lider)}</span>"
+        f"<span class='dv'>+{abs(delta):.2f}</span>"
+        f"</span>"
+    )
+
+
 def html_confronto(n, nome_a, df_a, tot_a, nome_b, df_b, tot_b, pesos=None) -> str:
     a_win = tot_a > tot_b
     b_win = tot_b > tot_a
@@ -1208,7 +1232,8 @@ def html_confronto(n, nome_a, df_a, tot_a, nome_b, df_b, tot_b, pesos=None) -> s
         seg_a = seg_b = "seg-lose"
     return (
         f"<div class='cc'>"
-        f"<div class='cc-h'><span class='ttl'>Confronto {n}</span></div>"
+        f"<div class='cc-h'><span class='ttl'>Confronto {n}</span>"
+        f"{html_delta_confronto(nome_a, tot_a, nome_b, tot_b)}</div>"
         f"<div class='cc-bar'>"
         f"<span class='{seg_a}' style='width:{wa:.1f}%'></span>"
         f"<span class='{seg_b}' style='width:{wb:.1f}%'></span>"

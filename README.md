@@ -3,7 +3,7 @@
 App [Streamlit](https://streamlit.io/) de uma **liga de fantasy (draft)** do Cartola FC (Brasileirão): **6 participantes** disputam **3 confrontos por rodada**, seguindo a tabela do turno.
 
 - **Pontuação** de cada jogador pelos **pesos da liga** (`scouts_pontuacao.json`): `Σ(scout × peso)`.
-- Cards de confronto com tema escuro: barra de placar, coroa do vencedor, status ao vivo (🟢 jogou / 🔴 em andamento / cinza não iniciado) e ⭐ no maior pontuador.
+- Cards de confronto com tema escuro: barra de placar, **diferença de pontos** no cabeçalho (quem lidera e por quanto), coroa do vencedor, status ao vivo (🟢 jogou / 🔴 em andamento / cinza não iniciado) e ⭐ no maior pontuador.
 - Auto-refresh a cada 10 minutos.
 - Três abas: **Ao vivo** (placar), **Histórico** (cada rodada arquivada) e **Classificação** do turno (V, E, D, pontos feitos e sofridos — ordena por vitórias → empates → pontos feitos → menos pontos sofridos). Quando incluem a **rodada em andamento**, sinalizam que é **parcial**.
 - **Configuração centralizada na planilha** (criada na 1ª execução, editável direto no Sheets; o app relê a cada ~2 min):
