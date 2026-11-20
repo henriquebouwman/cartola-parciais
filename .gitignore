@@ -18,3 +18,7 @@ escalacao_salva.json
 .DS_Store
 .vscode/
 .idea/
+
+# Saídas locais do checar_rodadas.py (relatório e backups da planilha)
+checagem_rodadas.csv
+backup_rodadas_*.json

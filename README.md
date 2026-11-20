@@ -48,9 +48,16 @@ streamlit run parciais.py
 
 O script `arquivar_rodada.py` grava, numa aba **`rodada{N}`** da mesma planilha, o **retrato de cada rodada**: por time (participante = nome do time no app), a escalação com a parcial de cada jogador (posição, clube, pontos) e o total do time.
 
-**Captura acertiva:** como o Cartola ajusta pontuações mesmo depois dos jogos, o script **sobrescreve** a aba `rodada{N}` a cada execução **enquanto o mercado está fechado** (rodada em andamento/encerrando). Com o cron de hora em hora, a **última gravação antes de o mercado reabrir (≤ 1h)** reflete as pontuações já ajustadas/finais. Quando o mercado reabre, o script para de escrever e a aba fica **congelada** no valor final.
+**Duas fases por rodada:**
 
-Quem dispara é o workflow `.github/workflows/arquivar-rodada.yml` (de hora em hora), independente do app estar aberto. As escalações vêm da aba `estado` do Sheets — ou seja, **exige a persistência em Google Sheets ligada** no app.
+1. **Mercado fechado (ao vivo):** o script **sobrescreve** a aba `rodada{N}` a cada execução com as parciais do momento (por time: jogador, posição, clube, parcial, scouts e `atleta_id`).
+2. **Mercado reaberto (consolidação):** o Cartola continua ajustando scouts depois dos jogos (SG perdido, DS revisado etc.), então a última gravação ao vivo pode não ser a final. Com o mercado aberto, `/atletas/pontuados/{N}` devolve os scouts **fechados** da rodada N; o script confere a aba `rodada{N}` contra a API e reescreve **só as células divergentes** (Parcial, Scouts, TOTAL), marcando o título como **"consolidado"**. É idempotente e não depende do horário em que o cron roda. Usa os jogadores gravados na própria aba (`atleta_id`, com fallback por apelido+clube nas abas antigas) — nunca a aba de estado, que já pode ter a escalação da rodada seguinte.
+
+Se sobrar alguma divergência que o robô não consiga corrigir sozinho (ex.: jogador não encontrado na API), o job **falha uma vez** e o GitHub manda e-mail; o título da aba registra a pendência.
+
+**Checagem/correção manual:** `python checar_rodadas.py` confere todas as abas `rodada{N}` contra a API (só leitura; relatório em `checagem_rodadas.csv`). Com `--corrigir`, reescreve as divergências (salvando antes um backup local `backup_rodadas_<data>.json`). Usa o `.streamlit/secrets.toml` ou as variáveis `GCP_SERVICE_ACCOUNT`/`GSHEETS_KEY`.
+
+Quem dispara é o workflow `.github/workflows/arquivar-rodada.yml` (de hora em hora), independente do app estar aberto. O workflow tem um passo de **keepalive** (o GitHub desativa agendamentos de repositórios públicos após 60 dias sem commits) e `concurrency` para nunca rodar duas gravações ao mesmo tempo. As escalações vêm da aba `estado` do Sheets — ou seja, **exige a persistência em Google Sheets ligada** no app.
 
 Há também um botão **"Arquivar rodada agora"** na sidebar do app (aparece só para o **master** com o Sheets configurado), para arquivar sob demanda a rodada atual — convive com o robô automático (ambos gravam/atualizam a mesma aba `rodada{N}`).
 
@@ -63,5 +70,5 @@ Há também um botão **"Arquivar rodada agora"** na sidebar do app (aparece só
 
 Depois, em **Actions**, habilite os workflows. Dá para testar na hora em **Actions → Arquivar rodada → Run workflow** (fora de rodada encerrada, ele só loga "nada a fazer" — o esperado).
 
-> Ajuste a frequência no `cron` do workflow se quiser checar mais perto do fim das rodadas.
+> Com a consolidação, atrasos do cron só atrasam a correção — não a impedem. Confira de vez em quando em **Actions** se o workflow está habilitado.
 

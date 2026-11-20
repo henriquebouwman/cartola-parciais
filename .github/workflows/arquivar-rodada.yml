@@ -1,15 +1,27 @@
 name: Arquivar rodada
 
-# Roda de hora em hora; grava a aba rodada{N} quando a rodada estiver encerrada.
+# Roda de hora em hora:
+#  - mercado FECHADO -> grava/atualiza a aba rodada{N} com as parciais ao vivo;
+#  - mercado ABERTO  -> consolida a aba da rodada que acabou com os scouts finais da API.
 # Também pode ser disparado manualmente em Actions → Run workflow.
 on:
   schedule:
     - cron: "0 * * * *"
   workflow_dispatch: {}
 
+# Evita duas execuções escrevendo na planilha ao mesmo tempo (cron atrasado + manual).
+concurrency:
+  group: arquivar-rodada
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write   # usado só pelo passo de keepalive
+
 jobs:
   arquivar:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -21,3 +33,12 @@ jobs:
           GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
           GSHEETS_KEY: ${{ secrets.GSHEETS_KEY }}
           GSHEETS_WORKSHEET: "escalacao atual"
+
+      # Repositórios públicos têm workflows agendados desativados após 60 dias sem
+      # commits. Reativar via API a cada execução mantém o cron vivo sem precisar commitar.
+      - name: Keepalive do agendamento
+        if: always() && github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/arquivar-rodada.yml/enable"

@@ -9,8 +9,19 @@ a última gravação antes de o mercado reabrir — com o cron de hora em hora, 
 antes da abertura — reflete as pontuações já ajustadas/finais. Quando o mercado
 reabre (`status_mercado = 1`), o script não escreve mais e a aba fica congelada.
 
-Cada linha: participante (nome do time no app), jogador, posição, clube e a
-parcial (Σ scout × peso da liga), com o total de cada time.
+**Consolidação** (garante a planilha igual ao Cartola): com o mercado aberto,
+`/atletas/pontuados/{N}` devolve os scouts já fechados da rodada N. Então, a cada
+execução com `status_mercado = 1`, o script confere a aba `rodada{N-1}` contra a
+API e reescreve só as células divergentes (Parcial, Scouts, TOTAL), marcando o
+título como "consolidado". É idempotente e não depende do horário em que o cron
+roda. A consolidação usa os jogadores gravados na própria aba (coluna atleta_id,
+com fallback por apelido+clube) — nunca a aba de estado, que já pode ter a
+escalação da rodada seguinte. Se sobrar algo que não dá para corrigir sozinho
+(ex.: jogador não encontrado), o script sai com código 1 uma vez, para o GitHub
+avisar por e-mail.
+
+Cada linha: participante (nome do time no app), jogador, posição, clube, a
+parcial (Σ scout × peso da liga), os scouts e o atleta_id, com o total de cada time.
 
 Variáveis de ambiente (GitHub Secrets):
   GCP_SERVICE_ACCOUNT  -> JSON da conta de serviço (string)
@@ -21,6 +32,7 @@ Variáveis de ambiente (GitHub Secrets):
 import json
 import os
 import pathlib
+import sys
 from datetime import datetime, timezone
 
 import requests
@@ -28,6 +40,7 @@ import requests
 API = "https://api.cartola.globo.com"
 BASE_DIR = pathlib.Path(__file__).resolve().parent
 POSICOES = {1: "GOL", 2: "LAT", 3: "ZAG", 4: "MEI", 5: "ATA"}
+CABECALHO = ["Participante", "Jogador", "Posição", "Clube", "Parcial", "Scouts", "atleta_id"]
 
 
 def get_json(url):
@@ -70,7 +83,7 @@ def scouts_para_texto(scout):
 def montar_linhas(rodada, confrontos, atletas_pont, atl_meta, clubes, pesos):
     quando = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     linhas = [[f"Rodada {rodada} — atualizado em {quando} (mercado fechado)"],
-              ["Participante", "Jogador", "Posição", "Clube", "Parcial", "Scouts"]]
+              CABECALHO]
     for n in sorted(confrontos, key=lambda x: int(x)):
         conf = confrontos[n] or {}
         for lado in ("a", "b"):
@@ -98,49 +111,113 @@ def montar_linhas(rodada, confrontos, atletas_pont, atl_meta, clubes, pesos):
                 linhas.append([participante, apelido,
                                POSICOES.get(posicao_id, ""),
                                clube.get("abreviacao", ""), pts,
-                               scouts_para_texto(scout)])
+                               scouts_para_texto(scout), str(aid)])
             if tem_jogador:
-                linhas.append([participante, "TOTAL", "", "", round(total, 2), ""])
+                linhas.append([participante, "TOTAL", "", "", round(total, 2), "", ""])
         linhas.append([])  # separador entre confrontos
     return linhas
+
+
+def consolidar(status):
+    """Mercado aberto: deixa a aba da rodada que acabou igual a /atletas/pontuados/{N}.
+
+    Retorna o código de saída (1 = sobraram divergências não corrigíveis, 1ª vez)."""
+    from checar_rodadas import abrir_planilha, aplicar_updates, checar_rodada, ler_abas
+
+    rodada_atual = int(status.get("rodada_atual") or 0)
+    if status.get("status_mercado") == 1:
+        alvo = rodada_atual - 1
+    elif status.get("game_over"):
+        alvo = rodada_atual  # fim de temporada: a última rodada não tem "próxima"
+    else:
+        print(f"Mercado em status {status.get('status_mercado')} (manutenção?). Nada a fazer.")
+        return 0
+    if alvo < 1:
+        print("Nenhuma rodada anterior para consolidar.")
+        return 0
+
+    dados = get_json(f"{API}/atletas/pontuados/{alvo}")
+    if not (dados or {}).get("atletas"):
+        print(f"API sem pontuações da rodada {alvo}. Nada a consolidar agora.")
+        return 0
+
+    sh = abrir_planilha()
+    abas = ler_abas(sh, {alvo})
+    if alvo not in abas:
+        print(f"Aba rodada{alvo} não existe (rodada não foi arquivada). Nada a consolidar.")
+        return 0
+
+    pesos = carregar_pesos()
+    resumo, divs = checar_rodada(alvo, abas[alvo], pesos, {}, dados=dados)
+    titulo_atual = resumo.get("titulo", "")
+    ups = resumo.get("updates", [])
+
+    pendentes = divs
+    if ups:
+        aplicar_updates(sh, alvo, ups)
+        print(f"Rodada {alvo}: {len(ups)} célula(s) corrigida(s) com os valores finais da API:")
+        for d in divs:
+            print(f"   L{d['linha']} {d['participante']} | {d['jogador']} | {d['tipo']}: {d['detalhe']}")
+        # Confere de novo o que ficou na planilha.
+        _r2, pendentes = checar_rodada(alvo, ler_abas(sh, {alvo})[alvo], pesos, {}, dados=dados)
+    else:
+        print(f"Rodada {alvo}: nada a corrigir automaticamente "
+              f"({resumo.get('ok')}/{resumo.get('jogadores')} jogadores batem com a API).")
+
+    quando = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    if pendentes:
+        novo = f"Rodada {alvo} — consolidado em {quando} ({len(pendentes)} pendência(s) — ver log do robô)"
+    else:
+        novo = f"Rodada {alvo} — consolidado em {quando} (scouts finais da API)"
+    ja_consolidada = "consolidado" in titulo_atual
+    ja_avisou = "pendência" in titulo_atual
+    if ups or not ja_consolidada or (bool(pendentes) != ja_avisou):
+        aplicar_updates(sh, alvo, [], titulo=novo)
+
+    if pendentes:
+        print(f"⚠️  {len(pendentes)} divergência(s) que o robô não conseguiu corrigir:")
+        for d in pendentes:
+            print(f"   L{d['linha']} {d['participante']} | {d['jogador']} | {d['tipo']}: {d['detalhe']}")
+        print(f"   Rode `python checar_rodadas.py --rodadas {alvo}` e ajuste manualmente.")
+        return 0 if ja_avisou else 1  # falha (e-mail do GitHub) só na 1ª vez
+    print(f"✅ Rodada {alvo} consolidada.")
+    return 0
 
 
 def main():
     status = get_json(f"{API}/mercado/status")
     if not status:
         print("Sem status do mercado. Nada a fazer.")
-        return
+        return 0
     if status.get("status_mercado") != 2:
-        print("Mercado aberto — histórico da rodada já está congelado. Nada a fazer.")
-        return
+        return consolidar(status)
 
     pontuados = get_json(f"{API}/atletas/pontuados")
     atletas_pont = (pontuados or {}).get("atletas", {}) or {}
     if not atletas_pont:
         print("Mercado fechado, mas ainda sem pontuações (rodada não começou). Nada a fazer.")
-        return
+        return 0
     rodada = pontuados.get("rodada") or status.get("rodada_atual")
     if not rodada:
         print("Não foi possível determinar o número da rodada.")
-        return
+        return 0
 
     # Conexão com o Sheets (import tardio: as checagens acima não precisam do gspread)
-    import gspread
-    gc = gspread.service_account_from_dict(json.loads(os.environ["GCP_SERVICE_ACCOUNT"]))
-    sh = gc.open_by_key(os.environ["GSHEETS_KEY"])
+    from checar_rodadas import abrir_planilha
+    sh = abrir_planilha()
 
     # Escalações salvas pelo app
     nome_estado = os.environ.get("GSHEETS_WORKSHEET", "estado")
     titulos = [w.title for w in sh.worksheets()]
     if nome_estado not in titulos:
         print(f"Aba de estado '{nome_estado}' ainda não existe (o app não salvou nada). Nada a arquivar.")
-        return
+        return 0
     ws_estado = sh.worksheet(nome_estado)
     estado = json.loads(ws_estado.acell("A1").value or "{}")
     escalacoes = estado.get("escalacoes", {}) or {}
     if not escalacoes:
         print("Nenhuma escalação salva na aba de estado. Nada a arquivar.")
-        return
+        return 0
 
     # Config da planilha: apelidos (aba participantes) + tabela de confrontos.
     apelidos = {}
@@ -164,7 +241,7 @@ def main():
             break
     if not pares:
         print(f"Sem confrontos configurados para a rodada {rodada}. Nada a arquivar.")
-        return
+        return 0
 
     confrontos = {}
     for i, (a, b) in enumerate(pares, start=1):
@@ -193,11 +270,14 @@ def main():
     if aba in [w.title for w in sh.worksheets()]:
         ws = sh.worksheet(aba)
         ws.clear()
+        if ws.col_count < len(CABECALHO):
+            ws.add_cols(len(CABECALHO) - ws.col_count)
     else:
-        ws = sh.add_worksheet(title=aba, rows=len(linhas) + 10, cols=6)
+        ws = sh.add_worksheet(title=aba, rows=len(linhas) + 10, cols=len(CABECALHO))
     ws.update(values=linhas, range_name="A1")
     print(f"✅ Aba '{aba}' atualizada ({len(linhas)} linhas).")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

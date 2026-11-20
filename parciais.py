@@ -528,13 +528,13 @@ def _worksheet_estado():
 
 
 def montar_linhas_rodada(rodada, confrontos, parciais, atletas_por_id, clubes_por_id, pesos):
-    """Linhas [Participante, Jogador, Posição, Clube, Parcial, Scouts] + total por time."""
+    """Linhas [Participante, Jogador, Posição, Clube, Parcial, Scouts, atleta_id] + total por time."""
     from datetime import datetime, timezone
 
     parciais_atletas = (parciais or {}).get("atletas", {}) or {}
     quando = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     linhas = [[f"Rodada {rodada} — arquivado em {quando}"],
-              ["Participante", "Jogador", "Posição", "Clube", "Parcial", "Scouts"]]
+              ["Participante", "Jogador", "Posição", "Clube", "Parcial", "Scouts", "atleta_id"]]
     for n in sorted(confrontos, key=lambda x: int(x)):
         conf = confrontos[n] or {}
         for lado in ("a", "b"):
@@ -556,9 +556,9 @@ def montar_linhas_rodada(rodada, confrontos, parciais, atletas_por_id, clubes_po
                 linhas.append([participante, meta.get("apelido", str(aid)),
                                POSICOES.get(meta.get("posicao_id"), ""),
                                (clube or {}).get("abreviacao", ""), pts,
-                               scouts_para_texto(scout)])
+                               scouts_para_texto(scout), str(aid)])
             if tem:
-                linhas.append([participante, "TOTAL", "", "", round(total, 2), ""])
+                linhas.append([participante, "TOTAL", "", "", round(total, 2), "", ""])
         linhas.append([])
     return linhas
 
@@ -570,8 +570,10 @@ def arquivar_rodada_no_sheets(rodada, linhas):
     if aba in [w.title for w in sh.worksheets()]:
         ws = sh.worksheet(aba)
         ws.clear()
+        if ws.col_count < 7:  # abas antigas foram criadas com 6 colunas (sem atleta_id)
+            ws.add_cols(7 - ws.col_count)
     else:
-        ws = sh.add_worksheet(title=aba, rows=len(linhas) + 10, cols=6)
+        ws = sh.add_worksheet(title=aba, rows=len(linhas) + 10, cols=7)
     ws.update(values=linhas, range_name="A1")
     return aba
 
